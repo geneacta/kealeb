@@ -29,9 +29,14 @@ for t in tests/*.keal; do
   "build/$name"
 done
 
-# What an application leaves behind, which is a question no assertion inside
-# the program can answer: the audit runs after its last statement. So this one
-# is built with `--audit` and what it printed is read here.
+# What an application leaves behind.
+#
+# The reason this step exists rather than an `assert` inside the program: the
+# audit speaks *after* the program's last statement, so there is no moment at
+# which the program could read its own verdict. An output is only attested
+# when something outside consumes it, and this is that something. Copying this
+# test without copying that reason gives a program that asserts nothing and
+# passes.
 printf '%-8s ' "lifetime"
 mkdir -p build
 ( cd build && "$KEALC" build --audit "$ROOT/tests/lifetime.keal" -I"$ROOT/runtime" >/dev/null )
@@ -58,8 +63,16 @@ emitted=0
 for t in tests/units.keal examples/todo.keal examples/counter.keal; do
   out="build/$(basename "$t" .keal).c"
   "$KEALC" emit-c "$t" -Iruntime > "$out"
+  # The same five names keal's own corpus is held to. Three of them —
+  # incompatible-pointer-types, implicit-function-declaration, int-conversion
+  # — mean the backend contradicted itself. The other two are what keal-view's
+  # bootstrap turned up.
   cc -fsyntax-only -std=c11 -Iruntime \
-     -Werror=incompatible-pointer-types -Werror=comment -Werror=parentheses "$out"
+     -Werror=incompatible-pointer-types \
+     -Werror=implicit-function-declaration \
+     -Werror=int-conversion \
+     -Werror=comment \
+     -Werror=parentheses "$out"
   emitted=$((emitted + 1))
 done
 echo "$emitted translation units, no warning worth the name"

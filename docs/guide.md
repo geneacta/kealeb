@@ -410,6 +410,31 @@ s.tick(50)                   // one turn of the loop
 `node` is present, [`tests/client.mjs`](../tests/client.mjs) — which runs the
 real client script against a real server.
 
+### Testing what a program leaves behind
+
+Keal frees an object when its last reference goes, so a leak here is a
+**cycle** and nothing else. `keal build --audit` reports what outlived a
+program and says which of it was unreachable:
+
+```sh
+keal build --audit tests/lifetime.keal && ./lifetime
+```
+
+The trap is that the verdict arrives *after* the last statement, so the
+program cannot assert on it — by the time there is an answer there is no
+program left to act on it. Something outside has to read the output;
+`tools/test.sh` does, and fails with the whole report when the answer is not
+`nothing outlived the program`. A version of that test ending in
+`assert(true, "no leaks")` looks like a test, runs green for ever, and checks
+nothing.
+
+The one shape in kealeb that needs it: a route's handler is kept by the router
+and the router by the application, so a handler that captured `this` to read
+the application's title would close the ring. Read the field into a local
+before the lambda and the closure holds the value instead of the object that
+had it. `weak` is not the answer here — it would say the application is only
+weakly held by its own routes, which is not what the program means.
+
 ## 11. Running it
 
 ```keal

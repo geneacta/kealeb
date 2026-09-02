@@ -422,6 +422,32 @@ s.tick(50)                   // un tour de boucle
 est présent, [`tests/client.mjs`](../tests/client.mjs) — qui exécute le vrai
 script client contre un vrai serveur.
 
+### Tester ce qu'un programme laisse derrière lui
+
+Keal libère un objet quand sa dernière référence disparaît, donc une fuite ici
+est un **cycle** et rien d'autre. `keal build --audit` dit ce qui a survécu au
+programme et lequel n'était plus joignable :
+
+```sh
+keal build --audit tests/lifetime.keal && ./lifetime
+```
+
+Le piège est que le verdict arrive *après* la dernière instruction : le
+programme ne peut donc pas l'affirmer lui-même — quand la réponse existe, il
+n'y a plus de programme pour en faire quelque chose. Il faut que quelque chose
+d'extérieur lise la sortie ; `tools/test.sh` le fait, et échoue avec le rapport
+entier quand la réponse n'est pas `nothing outlived the program`. Une version
+de ce test finissant par `assert(true, "aucune fuite")` ressemble à un test,
+passe au vert pour toujours, et ne vérifie rien.
+
+La seule forme de kealeb qui en a besoin : un gestionnaire de route est tenu
+par le routeur, et le routeur par l'application ; un gestionnaire qui
+capturerait `this` pour lire le titre de l'application fermerait donc la
+boucle. Lisez le champ dans un local avant la lambda, et la fermeture tient la
+valeur au lieu de l'objet qui l'avait. `weak` n'est pas la réponse ici : ce
+serait dire que l'application n'est que faiblement tenue par ses propres
+routes, ce que le programme ne veut pas dire.
+
 ## 11. La mise en service
 
 ```keal
