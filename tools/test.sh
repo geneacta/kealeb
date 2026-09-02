@@ -21,10 +21,27 @@ fi
 
 for t in tests/*.keal; do
   name=$(basename "$t" .keal)
+  # lifetime is built with --audit below, and building it twice would say the
+  # same thing twice while meaning less the second time.
+  [ "$name" = "lifetime" ] && continue
   sh tools/build.sh "$t" >/dev/null
   printf '%-8s ' "$name"
   "build/$name"
 done
+
+# What an application leaves behind, which is a question no assertion inside
+# the program can answer: the audit runs after its last statement. So this one
+# is built with `--audit` and what it printed is read here.
+printf '%-8s ' "lifetime"
+mkdir -p build
+( cd build && "$KEALC" build --audit "$ROOT/tests/lifetime.keal" -I"$ROOT/runtime" >/dev/null )
+left=$(cd build && ./lifetime 2>&1)
+echo "$left" | grep -q "nothing outlived the program" || {
+  echo "FAILED — something outlived it:"
+  echo "$left" | sed 's/^/  /'
+  exit 1
+}
+echo "an application was built, used and dropped, and left nothing"
 
 # The C the backend emits, read strictly.
 #

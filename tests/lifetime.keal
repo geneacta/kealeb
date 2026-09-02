@@ -1,0 +1,53 @@
+/// What an application leaves behind when it dies: nothing.
+///
+///     tools/test.sh          (builds this one with `keal build --audit`)
+///
+/// This is a test about reference counting rather than about HTTP, and it
+/// exists because of a shape the framework nearly adopted.
+///
+/// A route's handler is kept by the `Router`, the `Router` by the `App`. So a
+/// handler that reads the application's own configuration — its title, its
+/// stylesheet, its session hub — must read it into a local *before* the
+/// lambda. Capturing `this` instead closes the ring, and reference counting
+/// cannot open one. Measured, on this very file: one handler changed to
+/// capture `this` and the audit reports ten objects outliving the program —
+/// the `App`, the `Router`, all seven `Route`s and the `Hub` — none of them
+/// reachable, all of them a cycle.
+///
+/// `keal build` could not compile a lambda that captured `this` until keal
+/// `336c187`, so the framework was written this way under duress. It stays
+/// this way on purpose. That is what this file is for: the compiler no longer
+/// refuses the shape, so something else has to.
+///
+/// The assertion is not in this program — it cannot be, the audit runs after
+/// the last statement. `tools/test.sh` reads what it printed.
+
+import "../kealeb.keal"
+
+proc buildAndDrop() {
+    val site = app("lifetime")
+    site.page("/", { req -> column([h1("x"), p("y")]) })
+    site.page("/titled", { req -> card([txt("z")]) }, "Its own title")
+    site.formPage("/form", { req -> form([submit("go")]) }, { req -> redirect("/") })
+    site.livePage("/live", { req ->
+        var n = 0
+        view({ -> column([h1("${n}"), button("+", { e -> n = n + 1 })]) })
+    })
+    site.files("/static", "./public")
+    site.file("/favicon.svg", "./favicon.svg")
+    site.get("/plain", { req -> text("ok") })
+
+    val s = site.serverOn(0)
+    s.handle = { req -> dispatch(site.router, req) }
+
+    // Exercised, not just built: a handler that never ran might be holding
+    // something a handler that ran would have let go.
+    assert(dispatch(site.router, request("GET", "/plain")).text() == "ok", "the plain route answers")
+    assert(dispatch(site.router, request("GET", "/")).code == 200, "and the page")
+    assert(dispatch(site.router, request("GET", "/live")).code == 200, "and the live page")
+    assert(site.live.size() == 1, "which started a session")
+    assert(s.connections() == 0, "with no connection behind it")
+}
+
+buildAndDrop()
+println("an application was built, used and dropped")

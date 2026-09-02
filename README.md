@@ -115,6 +115,14 @@ blob and gives it back in `deinit`, so a connection that dies frees its
 buffers at the statement its last reference goes — no pool, no collector, and
 nothing to remember.
 
+It also decides one shape in `src/app.keal` that would otherwise look
+arbitrary. A route's handler is kept by the router and the router by the
+application, so a handler reads the application's own configuration into a
+local *before* the lambda rather than capturing `this`. Capturing `this` would
+close that ring, and reference counting cannot open one: changing a single
+line to do it leaks the `App`, the `Router`, every `Route` and the session hub
+— measured, and the reason `tests/lifetime.keal` exists.
+
 ## What is in it
 
 **HTTP/1.1.** Keep-alive, pipelining, `HEAD`, `Expect: 100-continue`, chunked
@@ -170,7 +178,11 @@ tools/test.sh
 
 `units` holds the buffers, the encodings, the request parser, the router, the
 renderer, the diff and the asset rules to their answers — 145 checks, no
-network. `client` is the one that matters: it builds the counter example,
+network. `lifetime` builds an application, uses it, drops it, and reads what
+`keal build --audit` says outlived it, which must be nothing. `cc` emits the
+backend's own C for three programs and compiles it with
+`-Werror=incompatible-pointer-types` — the warning that had been announcing a
+real miscompilation on every build until somebody read it. `client` is the one that matters: it builds the counter example,
 starts it, loads the page the server actually sends, runs the JavaScript the
 server actually serves against a DOM small enough to read, and clicks the
 button. The client is the only part of kealeb that does not run under `keal`,

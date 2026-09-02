@@ -49,9 +49,16 @@ public class App(
     /// byte is computed once, there is no JavaScript, and the result works in
     /// anything that can read HTML.
     public proc page(path: String, build: (Request) -> Node, title: String = "") {
-        // Read into locals first: the C backend cannot compile a lambda that
-        // captures `this`, and refuses it by name. Every registration in this
-        // file has that shape for that reason.
+        // Read into locals first, and keep doing it now that the compiler
+        // allows the other shape.
+        //
+        // The router keeps this handler, the App keeps the router. A lambda
+        // that captured `this` would close that ring, and reference counting
+        // cannot open one: measured, changing this one line to read
+        // `this.head` inside the lambda leaks the App, the Router, every
+        // Route and the Hub, and the audit calls it a cycle. Every
+        // registration in this file has this shape for that reason, and
+        // `tests/lifetime.keal` is what keeps it.
         val t = title.isEmpty() ? this.title : title
         val head = this.head
         val style = this.style
