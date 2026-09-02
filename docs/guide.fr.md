@@ -50,24 +50,20 @@ site.any("/ping", { req -> text("pong") })
 ```
 
 Un gestionnaire est un `(Request) -> Response`. C'est un type de fonction
-ordinaire, donc ce peut être une lambda, ou une valeur tenue dans une variable
-et qu'on se passe :
+ordinaire, donc ce peut être une fonction nommée, une lambda, ou une valeur
+qu'on se passe :
 
 ```keal
-val sante = { req: Request -> text("ok") }
+func sante(req: Request): Response { return text("ok") }
 
 site.get("/sante", sante)
 site.get("/santez", sante)
 ```
 
-Une `func` **nommée** serait la chose évidente à écrire ici, et cela ne marche
-pas encore : `keal build` mécompile une fonction nommée utilisée comme valeur
-— il passe un pointeur de fonction nu là où une fermeture est attendue, et le
-programme meurt. La VM à octets, elle, a bon, et c'est ainsi que le défaut a
-été trouvé. En attendant la correction du compilateur, tenez un gestionnaire
-dans un `val` comme ci-dessus. C'est signalé en amont, et c'est le seul
-endroit de ce guide où la forme est décidée par le langage et non par le
-cadriciel.
+Une fonction nommée utilisée comme valeur demande Keal en `4b21fc5` ou plus
+récent. Avant cela, le backend natif émettait le pointeur de fonction nu là où
+une fermeture était attendue, et le programme mourait — trouvé ici, corrigé en
+amont le jour même.
 
 ### Ce qu'un motif peut dire
 

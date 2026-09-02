@@ -12,12 +12,40 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
+# The same three places tools/build.sh looks, because the two must agree.
+if [ -n "$KEAL" ]; then KEALC=$KEAL
+elif [ -x "$ROOT/../keal/target/release/keal" ]; then KEALC=$ROOT/../keal/target/release/keal
+elif command -v keal >/dev/null 2>&1; then KEALC=keal
+else echo "no keal compiler found — set KEAL, or build ../keal" >&2; exit 1
+fi
+
 for t in tests/*.keal; do
   name=$(basename "$t" .keal)
   sh tools/build.sh "$t" >/dev/null
   printf '%-8s ' "$name"
   "build/$name"
 done
+
+# The C the backend emits, read strictly.
+#
+# The miscompilation this framework found — a named function passed as a value,
+# emitted as a bare pointer where a closure was expected — announced itself as
+# one `cc` warning on every single build, for as long as it had existed, and
+# nobody read it. So the warnings are read here, on purpose, and the one that
+# means "the backend emitted code its own C compiler thinks is wrong" is an
+# error. `keal build` does not do this and should not: a user's `native` block
+# may legitimately warn. This checks what the *backend* wrote.
+printf '%-8s ' "cc"
+mkdir -p build
+emitted=0
+for t in tests/units.keal examples/todo.keal examples/counter.keal; do
+  out="build/$(basename "$t" .keal).c"
+  "$KEALC" emit-c "$t" -Iruntime > "$out"
+  cc -fsyntax-only -std=c11 -Iruntime \
+     -Werror=incompatible-pointer-types -Werror=comment -Werror=parentheses "$out"
+  emitted=$((emitted + 1))
+done
+echo "$emitted translation units, no warning worth the name"
 
 # The client is the one file that does not run under `keal`, so it is checked
 # against a real server in the one runtime that can run it. No node, no check —

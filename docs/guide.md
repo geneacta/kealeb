@@ -49,22 +49,18 @@ site.any("/ping", { req -> text("pong") })
 ```
 
 A handler is `(Request) -> Response`. That is a plain function type, so a
-handler can be a lambda, or a value held in a variable and passed around:
+handler can be a named function, a lambda, or a value passed around:
 
 ```keal
-val health = { req: Request -> text("ok") }
+func health(req: Request): Response { return text("ok") }
 
 site.get("/health", health)
 site.get("/healthz", health)
 ```
 
-A **named** `func` would be the obvious thing to write here, and it does not
-work yet: `keal build` miscompiles a named function used as a value — it
-passes a bare function pointer where a closure is expected, and the program
-dies. The bytecode VM gets it right, which is how it was found. Until the
-compiler is fixed, hold a handler in a `val` as above. This is reported
-upstream and is the one place in this guide where the language, not the
-framework, decides the shape.
+A named function used as a value needs Keal at `4b21fc5` or later. Before
+that, the native backend emitted the bare function pointer where a closure was
+expected and the program died — found here, fixed upstream the same day.
 
 ### What a pattern can say
 

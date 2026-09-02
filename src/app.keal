@@ -49,6 +49,9 @@ public class App(
     /// byte is computed once, there is no JavaScript, and the result works in
     /// anything that can read HTML.
     public proc page(path: String, build: (Request) -> Node, title: String = "") {
+        // Read into locals first: the C backend cannot compile a lambda that
+        // captures `this`, and refuses it by name. Every registration in this
+        // file has that shape for that reason.
         val t = title.isEmpty() ? this.title : title
         val head = this.head
         val style = this.style
@@ -130,15 +133,10 @@ public class App(
     package proc mount() {
         if (this.mounted) { return }
         this.mounted = true
-        // The local copy is not a style: the C backend cannot yet compile a
-        // lambda that captures a top-level binding from another module, and
-        // this is the smallest thing that keeps the capture local.
-        val css = stylesheet
-        val js = clientScript
         this.router.get("/kealeb/kealeb.css",
-            { req -> text(css).type("text/css; charset=utf-8").with("cache-control", "max-age=300") })
+            { req -> text(stylesheet).type("text/css; charset=utf-8").with("cache-control", "max-age=300") })
         this.router.get("/kealeb/kealeb.js",
-            { req -> text(js).type("text/javascript; charset=utf-8").with("cache-control", "max-age=300") })
+            { req -> text(clientScript).type("text/javascript; charset=utf-8").with("cache-control", "max-age=300") })
         this.router.get("/kealeb/live", { req -> upgradeToSocket(req) })
     }
 

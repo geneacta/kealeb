@@ -15,15 +15,14 @@ val site = app("My site")
 
 // §2 — routes
 //
-// A handler held in a `val`, which is what the guide says to write. A named
-// `func` passed by name would be the obvious thing and is miscompiled by
-// `keal build` today — a bare function pointer where a closure is expected,
-// and the program dies. Reported upstream; when it is fixed, this becomes a
-// `func` and the guide says so again.
-val health = { req: Request -> text("ok") }
+// A named `func` passed by name, which is what the guide says to write and
+// what the native backend miscompiled until keal `4b21fc5`. This line is the
+// regression test for that, on this side of the fence.
+func health(req: Request): Response { return text("ok") }
 
 proc routes() {
     site.get("/health", health)
+    site.get("/healthz", health)
     site.get("/health2", { req -> text("ok") })
     site.post("/orders", { req -> jsonBody("{\"id\":7}").status(201) })
     site.put("/orders/{id}", { req -> text("replaced ${req.param("id")}") })
