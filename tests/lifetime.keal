@@ -8,11 +8,16 @@
 /// A route's handler is kept by the `Router`, the `Router` by the `App`. So a
 /// handler that reads the application's own configuration — its title, its
 /// stylesheet, its session hub — must read it into a local *before* the
-/// lambda. Capturing `this` instead closes the ring, and reference counting
-/// cannot open one. Measured, on this very file: one handler changed to
-/// capture `this` and the audit reports ten objects outliving the program —
-/// the `App`, the `Router`, all seven `Route`s and the `Hub` — none of them
-/// reachable, all of them a cycle.
+/// lambda. A closure that reaches back to the application closes the ring, and
+/// reference counting cannot open one.
+///
+/// Note what the handlers below do **not** do: none of them mentions `site`.
+/// That is the rule, and it is not about `this` specifically — `this` inside a
+/// method and `site` inside a lambda are the same reference. Measured on this
+/// very file, twice. Changing one handler in `src/app.keal` to read `this.head`
+/// inside its lambda: ten objects outlive the program, the `App`, the `Router`,
+/// all seven `Route`s and the `Hub`, none reachable, all a cycle. Adding one
+/// handler here that reads `site.title`: twenty-two, this file's whole graph.
 ///
 /// `keal build` could not compile a lambda that captured `this` until keal
 /// `336c187`, so the framework was written this way under duress. It stays

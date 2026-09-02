@@ -434,12 +434,32 @@ runner requires the audit to still report it, and to report exactly one. A
 suite that only ever checks for the absence of a thing goes green the day it
 stops being able to find it.
 
-The one shape in kealeb that needs it: a route's handler is kept by the router
-and the router by the application, so a handler that captured `this` to read
-the application's title would close the ring. Read the field into a local
-before the lambda and the closure holds the value instead of the object that
-had it. `weak` is not the answer here — it would say the application is only
-weakly held by its own routes, which is not what the program means.
+The one shape that needs it, and it is available to you and not only to the
+framework: **a handler must not hold the application.** The router keeps the
+handler and the application keeps the router, so a closure that reaches back
+closes the ring — and reference counting cannot open one.
+
+```keal
+val site = app("mine")
+
+site.get("/a", { req -> text(site.title) })       // holds the application
+val name = site.title
+site.get("/b", { req -> text(name) })             // holds a string
+```
+
+Inside a method of your own class it is the same thing spelt `this`. Either
+way the fix is the same: read what the closure needs into a local *before* the
+lambda, and the closure holds the value instead of the object that had it.
+
+In an ordinary program this costs nothing, and it is worth saying so plainly
+rather than raising an alarm: `val site = app(...)` at the top level lives
+until the process ends, so a ring inside it is never collected because nothing
+was ever going to collect it. It matters when an application is built and
+dropped — a test, or a program that serves more than one. That is exactly what
+`tests/lifetime.keal` does, and why its handlers never mention `site`.
+
+`weak` is not the answer here. It would say the application is only weakly
+held by its own routes, which is not what the program means.
 
 ## 11. Running it
 

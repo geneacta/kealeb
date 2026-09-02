@@ -133,9 +133,13 @@ proven=0
 for name in $STRICT; do
   fault "$name" > "build/probe/$name.c" || { echo; exit 1; }
   if cc -fsyntax-only -std=c11 "-Werror=$name" "build/probe/$name.c" 2>/dev/null; then
-    echo "FAILED — -Werror=$name accepted the fault it exists to refuse,"
-    echo "  so this compiler has the name and ignores it. The barrier is"
-    echo "  made of nothing until that is explained."
+    echo "FAILED — cc accepted this under -Werror=$name:"
+    sed 's/^/    /' "build/probe/$name.c"
+    echo "  Two things can cause that and this test cannot tell them apart:"
+    echo "  the compiler has the name and ignores it, or what is printed above"
+    echo "  stopped being a fault. Read it — if it still commits the error the"
+    echo "  name describes, the flag is the problem. Either way the barrier"
+    echo "  below is made of nothing until it is explained."
     exit 1
   fi
   proven=$((proven + 1))
@@ -149,7 +153,19 @@ for t in tests/units.keal examples/todo.keal examples/counter.keal; do
   out="build/$(basename "$t" .keal).c"
   "$KEALC" emit-c "$t" -Iruntime > "$out"
   # shellcheck disable=SC2086
-  cc -fsyntax-only -std=c11 -Iruntime $flags "$out"
+  if ! cc -fsyntax-only -std=c11 -Iruntime $flags "$out" 2>build/probe/cc.err; then
+    echo "FAILED — the backend emitted C that its own C compiler objects to,"
+    echo "  compiling $t. This is the step that would have caught a named"
+    echo "  function passed as a value being emitted as a bare pointer, which"
+    echo "  is what it was written for. What cc said about $out:"
+    if [ -s build/probe/cc.err ]; then
+      sed 's/^/  /' build/probe/cc.err
+    else
+      echo "  nothing at all — cc refused without a diagnostic, which is a"
+      echo "  second bug on top of the first and the more surprising of the two."
+    fi
+    exit 1
+  fi
   emitted=$((emitted + 1))
 done
 

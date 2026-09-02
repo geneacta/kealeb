@@ -446,13 +446,35 @@ lanceur exige que l'audit le voie encore, et qu'il en voie exactement un. Une
 suite qui ne vérifie jamais que l'absence d'une chose passe au vert le jour où
 elle cesse de savoir la trouver.
 
-La seule forme de kealeb qui en a besoin : un gestionnaire de route est tenu
-par le routeur, et le routeur par l'application ; un gestionnaire qui
-capturerait `this` pour lire le titre de l'application fermerait donc la
-boucle. Lisez le champ dans un local avant la lambda, et la fermeture tient la
-valeur au lieu de l'objet qui l'avait. `weak` n'est pas la réponse ici : ce
-serait dire que l'application n'est que faiblement tenue par ses propres
-routes, ce que le programme ne veut pas dire.
+La seule forme qui en a besoin, et elle vous est offerte autant qu'au
+cadriciel : **un gestionnaire ne doit pas tenir l'application.** Le routeur
+tient le gestionnaire et l'application tient le routeur, donc une fermeture qui
+revient en arrière ferme la boucle — et le comptage de références ne sait pas
+en ouvrir une.
+
+```keal
+val site = app("le mien")
+
+site.get("/a", { req -> text(site.title) })       // tient l'application
+val nom = site.title
+site.get("/b", { req -> text(nom) })              // tient une chaîne
+```
+
+Dans une méthode de votre propre classe, c'est la même chose épelée `this`.
+Dans les deux cas le remède est le même : lire ce dont la fermeture a besoin
+dans un local *avant* la lambda, et la fermeture tient la valeur au lieu de
+l'objet qui l'avait.
+
+Dans un programme ordinaire cela ne coûte rien, et il vaut mieux le dire
+franchement que crier au loup : `val site = app(...)` au premier niveau vit
+jusqu'à la fin du processus, donc une boucle à l'intérieur n'est jamais
+ramassée parce que rien n'allait jamais la ramasser. Cela compte quand une
+application est construite puis lâchée — un test, ou un programme qui en sert
+plusieurs. C'est précisément ce que fait `tests/lifetime.keal`, et pourquoi ses
+gestionnaires ne mentionnent jamais `site`.
+
+`weak` n'est pas la réponse ici : ce serait dire que l'application n'est que
+faiblement tenue par ses propres routes, ce que le programme ne veut pas dire.
 
 ## 11. La mise en service
 
