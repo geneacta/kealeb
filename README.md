@@ -180,9 +180,16 @@ tools/test.sh
 renderer, the diff and the asset rules to their answers — 145 checks, no
 network. `lifetime` builds an application, uses it, drops it, and reads what
 `keal build --audit` says outlived it, which must be nothing. `cc` emits the
-backend's own C for three programs and compiles it with
-`-Werror=incompatible-pointer-types` — the warning that had been announcing a
-real miscompilation on every build until somebody read it. `client` is the one that matters: it builds the counter example,
+backend's own C and compiles it under five `-Werror` names — one of which had
+been announcing a real miscompilation on every build until somebody read it.
+
+Those last two assert **negatives**, and a negative goes green the moment the
+instrument stops working. So each has a control. `leaks` builds a reference
+cycle on purpose — a closure that captures `this` and is stored in the object
+it captured — and requires the audit to still see it, and to see exactly one,
+since the two objects in that file differ only in what their closure holds.
+The `cc` step hands each of its five flags a fault of its own and requires
+each to refuse it. Five flags that reject nothing pass everything. `client` is the one that matters: it builds the counter example,
 starts it, loads the page the server actually sends, runs the JavaScript the
 server actually serves against a DOM small enough to read, and clicks the
 button. The client is the only part of kealeb that does not run under `keal`,

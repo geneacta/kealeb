@@ -440,6 +440,12 @@ entier quand la réponse n'est pas `nothing outlived the program`. Une version
 de ce test finissant par `assert(true, "aucune fuite")` ressemble à un test,
 passe au vert pour toujours, et ne vérifie rien.
 
+Ce test affirme un négatif, il a donc un témoin :
+[`tests/leaks.keal`](../tests/leaks.keal) construit le cycle exprès, et le
+lanceur exige que l'audit le voie encore, et qu'il en voie exactement un. Une
+suite qui ne vérifie jamais que l'absence d'une chose passe au vert le jour où
+elle cesse de savoir la trouver.
+
 La seule forme de kealeb qui en a besoin : un gestionnaire de route est tenu
 par le routeur, et le routeur par l'application ; un gestionnaire qui
 capturerait `this` pour lire le titre de l'application fermerait donc la

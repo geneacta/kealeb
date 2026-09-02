@@ -23,7 +23,10 @@ for t in tests/*.keal; do
   name=$(basename "$t" .keal)
   # lifetime is built with --audit below, and building it twice would say the
   # same thing twice while meaning less the second time.
+  # Both of these are built with --audit below; building them twice would say
+  # the same thing twice while meaning less the second time.
   [ "$name" = "lifetime" ] && continue
+  [ "$name" = "leaks" ] && continue
   sh tools/build.sh "$t" >/dev/null
   printf '%-8s ' "$name"
   "build/$name"
@@ -47,6 +50,25 @@ echo "$left" | grep -q "nothing outlived the program" || {
   exit 1
 }
 echo "an application was built, used and dropped, and left nothing"
+
+# The control for the step above.
+#
+# `lifetime` asserts a negative, and a negative goes green the moment the
+# instrument stops working: if `--audit` ever stopped finding cycles, it would
+# pass while every leak went unreported. So `leaks` builds the cycle on
+# purpose and this requires the audit to still see it — and to see exactly
+# one, since the pair in that file differ only in what their closure holds.
+# `2 Table` would mean it stopped telling them apart, which is the other
+# direction of the same failure.
+printf '%-8s ' "leaks"
+( cd build && "$KEALC" build --audit "$ROOT/tests/leaks.keal" -I"$ROOT/runtime" >/dev/null )
+found=$(cd build && ./leaks 2>&1)
+{ echo "$found" | grep -q "^  1 Table$" && echo "$found" | grep -q "a cycle"; } || {
+  echo "FAILED — the audit no longer sees a cycle it is standing in front of:"
+  echo "$found" | sed 's/^/  /'
+  exit 1
+}
+echo "a cycle built on purpose is still reported as exactly one"
 
 # The C the backend emits, read strictly.
 #
@@ -75,7 +97,25 @@ for t in tests/units.keal examples/todo.keal examples/counter.keal; do
      -Werror=parentheses "$out"
   emitted=$((emitted + 1))
 done
-echo "$emitted translation units, no warning worth the name"
+# And the control for this step, for the same reason as `leaks`: five flags
+# that reject nothing pass everything. Each name is given its own fault and
+# must refuse it.
+probe=build/probe
+mkdir -p "$probe"
+printf 'int f(long x){return (int)x;}\nint g(void){int(*p)(void)=f;return p();}\n' > "$probe/incompatible-pointer-types.c"
+printf 'int g(void){return nosuchfn();}\n' > "$probe/implicit-function-declaration.c"
+printf 'int *g(void){return 1;}\n' > "$probe/int-conversion.c"
+printf '/* /* */\nint g(void){return 0;}\n' > "$probe/comment.c"
+printf 'int g(int a,int b){ if (a = b) return 1; return 0; }\n' > "$probe/parentheses.c"
+for name in incompatible-pointer-types implicit-function-declaration \
+            int-conversion comment parentheses; do
+  if cc -fsyntax-only -std=c11 "-Werror=$name" "$probe/$name.c" 2>/dev/null; then
+    echo "FAILED — -Werror=$name accepted the fault it exists to refuse"
+    exit 1
+  fi
+done
+
+echo "$emitted translation units clean, and five flags that each refuse their own fault"
 
 # The client is the one file that does not run under `keal`, so it is checked
 # against a real server in the one runtime that can run it. No node, no check —

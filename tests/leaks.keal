@@ -1,0 +1,45 @@
+/// The control: a cycle the audit must still be able to see.
+///
+/// `tests/lifetime.keal` asserts that an application leaves nothing behind.
+/// That assertion is a negative, and a negative passes for the wrong reason
+/// the moment the instrument stops working: if `--audit` ever stopped finding
+/// cycles at all, `lifetime` would go green and stay green while every leak in
+/// the framework went unreported.
+///
+/// So this program leaks on purpose, in exactly the shape the framework must
+/// not have — a closure that captures `this` and is stored in the object it
+/// captured. `tools/test.sh` requires the audit to name it, and to say there
+/// is **exactly one**, because the pair below is what makes that number able
+/// to be wrong: two `Table`s are built the same way and differ only in what
+/// their closure holds. `1 Table` means the audit told them apart. `2 Table`
+/// or `nothing outlived the program` both mean it did not.
+///
+/// Nothing here is a bug to fix. Deleting this file would leave the suite
+/// green and blind.
+
+class Table(var routes: List<(Int) -> Int>, var title: String) {
+    /// The ring: the closure holds the object, the object holds the closure.
+    proc addHoldingThis() { this.routes.add({ n -> n + this.title.length }) }
+
+    /// The same handler, holding the value instead of the object that had it.
+    proc addHoldingValue() {
+        val width = this.title.length
+        this.routes.add({ n -> n + width })
+    }
+}
+
+proc leaks() {
+    val t = Table([], "abc")
+    t.addHoldingThis()
+    assert(t.routes[0](1) == 4, "the handler that holds `this` still answers")
+}
+
+proc doesNot() {
+    val t = Table([], "abc")
+    t.addHoldingValue()
+    assert(t.routes[0](1) == 4, "and so does the one that holds the value")
+}
+
+leaks()
+doesNot()
+println("two tables built the same way, one holding `this`")

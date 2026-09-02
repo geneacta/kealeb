@@ -428,6 +428,12 @@ program left to act on it. Something outside has to read the output;
 `assert(true, "no leaks")` looks like a test, runs green for ever, and checks
 nothing.
 
+That test asserts a negative, so it has a control:
+[`tests/leaks.keal`](../tests/leaks.keal) builds the cycle on purpose and the
+runner requires the audit to still report it, and to report exactly one. A
+suite that only ever checks for the absence of a thing goes green the day it
+stops being able to find it.
+
 The one shape in kealeb that needs it: a route's handler is kept by the router
 and the router by the application, so a handler that captured `this` to read
 the application's title would close the ring. Read the field into a local
