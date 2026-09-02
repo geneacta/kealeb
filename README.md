@@ -8,7 +8,7 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         3 201   the whole framework: HTTP, routing, the component
+  Keal         3 241   the whole framework: HTTP, routing, the component
                        tree, the renderer, JSON, WebSocket framing, the
                        session hub and the diff
   C              442   sockets, poll, byte blobs — one header, no .c file
@@ -169,7 +169,7 @@ tools/test.sh
 ```
 
 `units` holds the buffers, the encodings, the request parser, the router, the
-renderer, the diff and the asset rules to their answers — 142 checks, no
+renderer, the diff and the asset rules to their answers — 145 checks, no
 network. `client` is the one that matters: it builds the counter example,
 starts it, loads the page the server actually sends, runs the JavaScript the
 server actually serves against a DOM small enough to read, and clicks the
@@ -184,10 +184,12 @@ is none.
 
 The honest list.
 
-* **Keyed lists.** A node's identity is its position, so inserting at the
-  front rewrites everything after it. One rule with no exceptions is worth
-  more at this stage than a fast path with several — but this is the first
-  thing to fix.
+* **Moving a node cheaply.** `.keyed(id)` already decides *identity* — a node
+  whose key changed is rebuilt rather than patched, so a list that shifted up
+  by one does not hand the browser's caret and focus to a different row. What
+  it does not yet do is make the move cheap: the diff walks children by index
+  and does not look for one that moved, so inserting at the front still
+  rewrites everything after it. Correct, and more work than it needs to be.
 * **TLS.** None. Put it behind a reverse proxy, which is where a terminator
   belongs anyway.
 * **Windows.** `runtime/kb.h` is POSIX. Winsock wants a different `poll` and a

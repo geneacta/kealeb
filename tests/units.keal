@@ -247,6 +247,16 @@ proc testLive() {
     same(changes(column([txt("a")]), column([nothing()])),
          "[[\"r\",\"0\",\"<!---->\"]]", "text that empties becomes that node, not empty text")
 
+    // A key says what a node *is*. Same shape, same position, different key:
+    // the browser's node goes, and the caret, focus and scroll that came with
+    // it go too rather than being inherited by something else.
+    same(changes(column([el("input").keyed("a")]), column([el("input").keyed("b")])),
+         "[[\"r\",\"0\",\"<input>\"]]", "a different key is a different node")
+    same(changes(column([el("input").keyed("a")]), column([el("input").keyed("a")])),
+         "[]", "and the same key is the same node")
+    same(changes(column([el("input").attr("value", "x")]), column([el("input").attr("value", "y")])),
+         "[[\"a\",\"0\",\"value\",\"y\"]]", "with no key at all, position is identity")
+
     // Two children removed: the indices must still name the right ones, which
     // is why they go backwards.
     same(changes(column([h1("a"), p("b"), p("c")]), column([h1("a")])),

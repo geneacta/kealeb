@@ -304,10 +304,36 @@ rendrait aucun octet décalerait tout ce qui suit. C'est pour cela que
 `nothing()` existe et rend un commentaire vide, et pour cela que `raw` doit
 contenir exactement un élément.
 
-C'est aussi pour cela qu'il n'y a pas encore de listes à clés : insérer en
-tête d'une liste réécrit les libellés de tout ce qui suit. Correct, et plus de
-travail qu'il n'en faut. `.keyed(k)` est accepté et réservé ; il ne fait rien
-pour l'instant.
+### L'identité, et quand dire ce qu'un nœud est
+
+Sans clé, **l'identité est la position**. Le nœud en `0.2.1` est comparé à ce
+qui était en `0.2.1` la fois d'avant, et si les balises correspondent, le nœud
+du navigateur est conservé et ses attributs ajustés. C'est juste quand c'est la
+même chose rendue de nouveau — le cas ordinaire, soixante fois sur soixante.
+
+C'est faux quand deux choses *différentes* atterrissent au même endroit : une
+liste décalée d'un cran, un onglet qui a changé, une ligne supprimée. Le nœud
+est conservé, et avec lui tout ce que le serveur ignore de lui — le caret, le
+focus, la position de défilement, une frappe pas encore signalée. Tout cela
+appartient maintenant à autre chose.
+
+`.keyed(id)` est la façon pour une page de dire *ceci est une autre chose* :
+
+```keal
+for (tache in taches) {
+    lignes.add(row([...]).keyed("tache-${tache.id}"))
+}
+```
+
+Un nœud dont la clé a changé est reconstruit plutôt que rapiécé, si bien que
+cet état part avec lui. Les clés sont comparées sur le serveur et n'atteignent
+jamais le navigateur.
+
+Ce que les clés ne font **pas** encore, c'est rendre un déplacement bon marché :
+insérer en tête d'une liste réécrit toujours tout ce qui suit, parce que le
+diff parcourt les enfants par indice et ne cherche pas celui qui a bougé.
+Correct, et plus de travail qu'il n'en faut. C'est la prochaine chose à
+corriger.
 
 ### Les sessions
 

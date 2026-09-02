@@ -98,7 +98,20 @@ public class Node(
         return this
     }
 
-    /// The identity this node keeps across renders.
+    /// Say what this node *is*, so that a different thing at the same position
+    /// is rebuilt rather than patched.
+    ///
+    /// Without a key, identity is position: the node at `0.2.1` is compared
+    /// with whatever was at `0.2.1` last time, and if they have the same tag
+    /// the browser's node is kept and its attributes adjusted. That is right
+    /// when it is the same thing rendered again. It is wrong when a list
+    /// shifted up by one, or a tab changed — the node is kept, and with it
+    /// the caret, the focus, the scroll position and any keystroke the server
+    /// has not seen yet, all of which now belong to something else.
+    ///
+    /// Give the rows of a list the identity of what they show —
+    /// `.keyed("task-${id}")` — and a row that is not the same row is a new
+    /// node. Keys are compared on the server and never reach the browser.
     public func keyed(k: String): Node {
         this.key = k
         return this

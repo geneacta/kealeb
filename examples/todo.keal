@@ -12,6 +12,10 @@ import "../kealeb.keal"
 /// server is what decides what a field holds. Nothing else on the page moves
 /// until the task is added.
 ///
+/// Every row says which task it is with `.keyed`. Without it a node's identity
+/// is its position, so removing the first row would hand its browser node —
+/// its focus, its caret — to the task that moved up into its place.
+///
 /// Two shapes here are the language's, not the framework's, and both are
 /// worth knowing before writing your own page. The helpers are top-level
 /// `proc`s rather than functions nested inside the factory, because
@@ -20,7 +24,18 @@ import "../kealeb.keal"
 /// than the task itself, because the contents of a parameter belong to the
 /// caller unless the signature says `var`, and a lambda's parameter cannot.
 
-class Task(public var what: String, public var done: Bool)
+class Task(public val id: Int, public var what: String, public var done: Bool)
+
+/// Where a task's identity comes from. It has to come from somewhere other
+/// than the position in the list: remove the first row and every row below
+/// moves up one, and without an identity the browser keeps the node — and
+/// with it the focus and the caret, which now belong to a different task.
+var nextId = 0
+
+func freshTask(what: String, done: Bool): Task {
+    nextId = nextId + 1
+    return Task(nextId, what, done)
+}
 
 /// Tick one off, or un-tick it.
 proc setDone(var tasks: List<Task>, at: Int, on: Bool) {
@@ -37,14 +52,14 @@ proc forget(var tasks: List<Task>, at: Int) {
 val site = app("kealeb — tasks")
 
 site.livePage("/", { req ->
-    val tasks: List<Task> = [Task("Read the guide", true), Task("Write a page", false)]
+    val tasks: List<Task> = [freshTask("Read the guide", true), freshTask("Write a page", false)]
     var draft = ""
     var showing = "all"
 
     val add = { e: Ev ->
         val what = draft.trim()
         if (not what.isEmpty()) {
-            tasks.add(Task(what, false))
+            tasks.add(freshTask(what, false))
             draft = ""
         }
     }
@@ -63,7 +78,7 @@ site.livePage("/", { req ->
                 checkbox(t.done, { e -> setDone(tasks, at, e.checked()) }),
                 what,
                 button("remove", { e -> forget(tasks, at) }).cls("kb-danger")
-            ]))
+            ]).keyed("task-${t.id}"))
         }
         val left = tasks.count({ t -> not t.done })
         column([

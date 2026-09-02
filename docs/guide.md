@@ -295,10 +295,35 @@ A handler is `(Ev) -> Unit`:
 would shift everything after it. That is why `nothing()` exists and renders an
 empty comment, and why `raw` must contain exactly one element.
 
-It is also why there are no keyed lists yet: inserting at the front of a list
-rewrites the labels of everything after it. Correct, and more work than it
-needs to be. `.keyed(k)` is accepted and reserved; it does not do anything
-yet.
+### Identity, and when to say what a node is
+
+Without a key, **identity is position**. The node at `0.2.1` is compared with
+whatever was at `0.2.1` last time, and if the tags match the browser's node is
+kept and its attributes adjusted. That is right when it is the same thing
+rendered again — which is the ordinary case, sixty times out of sixty.
+
+It is wrong when two *different* things land in the same place: a list shifted
+up by one, a tab that changed, a row that was deleted. The node is kept, and
+so is everything the server does not know about it — the caret, the focus, the
+scroll position, a keystroke that has not been reported yet. They now belong
+to something else.
+
+`.keyed(id)` is how a page says *this is a different thing*:
+
+```keal
+for (task in tasks) {
+    rows.add(row([...]).keyed("task-${task.id}"))
+}
+```
+
+A node whose key changed is rebuilt rather than patched, so that state is
+thrown away with it. Keys are compared on the server and never reach the
+browser.
+
+What keys do **not** do yet is make a move cheap: inserting at the front of a
+list still rewrites everything after it, because the diff walks children by
+index and does not look for one that moved. Correct, and more work than it
+needs to be. That is the next thing to fix.
 
 ### Sessions
 

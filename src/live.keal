@@ -231,8 +231,21 @@ func patch4(op: String, path: String, a: String, b: String): Json {
 /// remove an attribute, replace a node, insert a child, remove a child. A
 /// browser can do each of them in one call, which is why the list is this one
 /// and not a shorter one that needs interpretation at the other end.
+///
+/// **A different tag or a different key is a replacement, not a patch**, and
+/// the key half is the one worth explaining. A node's identity here is its
+/// position, so two nodes of the same shape at the same place are patched
+/// into one another — which is right when they *are* the same thing rendered
+/// again, and wrong when they are two different things that happen to look
+/// alike. The browser keeps what the server does not know about: the caret,
+/// the focus, the scroll position, an unsent keystroke. `.keyed(id)` is how a
+/// page says *this is a different thing*, and then that state is thrown away
+/// with the node instead of inherited by the next one.
+///
+/// A node with no key is compared as before. Keys are never sent to the
+/// browser — both trees are here, so the comparison is made here.
 public proc diffNode(old: Node, now: Node, path: String, var out: List<Json>) {
-    if (old.tag != now.tag) {
+    if ((old.tag != now.tag) or (old.key != now.key)) {
         out.add(patch3("r", path, render(now)))
         return
     }
