@@ -60,6 +60,17 @@ proc buildAndDrop() {
     assert(dispatch(site.router, request("GET", "/live")).code == 200, "and the live page")
     assert(site.live.size() == 1, "which started a session")
     assert(s.connections() == 0, "with no connection behind it")
+
+    // And the session is driven, not merely opened. `refreshAll` runs the
+    // view again, numbers the new tree, diffs it against the old one and
+    // replaces both the tree and the handler table — which is every
+    // allocation a live page makes after the first render. A session that is
+    // created and never used would not exercise the one thing whose lifetime
+    // is least obvious: the handler table, a map from a path to a node that
+    // holds the closure that rebuilds the page it is in.
+    site.live.refreshAll()
+    site.live.refreshAll()
+    assert(site.live.size() == 1, "and refreshing it does not open another")
 }
 
 buildAndDrop()

@@ -434,10 +434,13 @@ runner requires the audit to still report it, and to report exactly one. A
 suite that only ever checks for the absence of a thing goes green the day it
 stops being able to find it.
 
-The one shape that needs it, and it is available to you and not only to the
-framework: **a handler must not hold the application.** The router keeps the
-handler and the application keeps the router, so a closure that reaches back
-closes the ring — and reference counting cannot open one.
+The rule is one line and it is not about handlers, or about kealeb: **a
+closure stored in an object must not hold that object.** Reference counting
+frees what nothing points at, and a ring points at itself.
+
+In this framework the ring goes through the router — it keeps the handler, and
+the application keeps it — so the shape to avoid is a handler that reaches
+back to the application:
 
 ```keal
 val site = app("mine")

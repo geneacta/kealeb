@@ -446,11 +446,14 @@ lanceur exige que l'audit le voie encore, et qu'il en voie exactement un. Une
 suite qui ne vérifie jamais que l'absence d'une chose passe au vert le jour où
 elle cesse de savoir la trouver.
 
-La seule forme qui en a besoin, et elle vous est offerte autant qu'au
-cadriciel : **un gestionnaire ne doit pas tenir l'application.** Le routeur
-tient le gestionnaire et l'application tient le routeur, donc une fermeture qui
-revient en arrière ferme la boucle — et le comptage de références ne sait pas
-en ouvrir une.
+La règle tient en une ligne et ne parle ni de gestionnaires ni de kealeb :
+**une fermeture rangée dans un objet ne doit pas tenir cet objet.** Le comptage
+de références libère ce que plus rien ne désigne, et une boucle se désigne
+elle-même.
+
+Dans ce cadriciel la boucle passe par le routeur — il tient le gestionnaire, et
+l'application le tient — donc la forme à éviter est un gestionnaire qui revient
+à l'application :
 
 ```keal
 val site = app("le mien")

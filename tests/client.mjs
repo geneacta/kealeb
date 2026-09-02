@@ -162,15 +162,51 @@ function pushText(at, text) {
 
 // --------------------------------------------------------------- the harness
 
-const port = 8891;
-const server = spawn('build/counter', [], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
-server.stdout.on('data', () => {});
+// Port 0, and the server says which one it got. Asking for a fixed port makes
+// this test fail — or worse, quietly talk to something else — whenever
+// anything holds it, including a previous run of itself that outlived its
+// kill. Reading the port out of the line the server prints is exact: there is
+// no window between choosing it and binding it.
+const server = spawn('build/counter', ['0'], { stdio: ['ignore', 'pipe', 'pipe'] });
 server.stderr.on('data', (d) => process.stderr.write(d));
 process.on('exit', () => server.kill());
 
+// An error this file raised on purpose, whose message is the whole story.
+function expected(message) {
+  const e = new Error(message);
+  e.expected = true;
+  return e;
+}
+
+function listeningPort(within) {
+  return new Promise((resolve, reject) => {
+    let seen = '';
+    const giveUp = setTimeout(() => {
+      reject(expected(
+        `the counter example never said it was listening, within ${within}ms.\n` +
+        `    What it printed instead: ${seen ? JSON.stringify(seen) : '(nothing at all)'}\n` +
+        `    Run it by hand to see why: tools/build.sh examples/counter.keal && build/counter 0`));
+    }, within);
+    server.stdout.on('data', (d) => {
+      seen += String(d);
+      const at = /listening on http:\/\/[^:]+:(\d+)/.exec(seen);
+      if (at) {
+        clearTimeout(giveUp);
+        resolve(Number(at[1]));
+      }
+    });
+    server.on('exit', (code) => {
+      clearTimeout(giveUp);
+      reject(expected(
+        `the counter example exited with status ${code} before it said it was listening.\n` +
+        `    Run it by hand to see why: tools/build.sh examples/counter.keal && build/counter 0`));
+    });
+  });
+}
+
 async function main() {
-  await sleep(700);
-  const page = await (await fetch(`http://127.0.0.1:8080/`)).text();
+  const port = await listeningPort(8000);
+  const page = await (await fetch(`http://127.0.0.1:${port}/`)).text();
 
   const session = /window\.KB_SESSION="([0-9a-f]+)"/.exec(page);
   ok(session !== null, 'the page names a session');
@@ -200,7 +236,7 @@ async function main() {
     body: new DomNode(1, 'body'),
   };
   const window = { KB_SESSION: session[1], addEventListener() {} };
-  const location = { protocol: 'http:', host: `127.0.0.1:8080`, reload() { fail.push('the client reloaded'); } };
+  const location = { protocol: 'http:', host: `127.0.0.1:${port}`, reload() { fail.push('the client reloaded'); } };
 
   const source = clientSource();
   ok(source.length > 500, 'the client script is served from the framework');
@@ -277,13 +313,24 @@ function clientSource() {
   return file.slice(from, to);
 }
 
+// A failure in the harness is not a failed check, and reporting it as one
+// ("1 of 0 checks failed") tells the reader nothing about what went wrong.
+// The errors raised above carry the whole explanation in their message; a
+// stack trace from `node:internal/child_process` carries none of it, so the
+// stack is printed only for the ones nobody wrote on purpose.
+let broke = null;
 try {
   await main();
 } catch (e) {
-  fail.push(`threw: ${e.stack}`);
+  broke = e;
 }
 server.kill();
 
+if (broke) {
+  console.log('could not run');
+  console.error(`  ✗ ${broke.expected ? broke.message : broke.stack}`);
+  process.exit(1);
+}
 if (fail.length) {
   for (const f of fail) console.error(`  ✗ ${f}`);
   console.log(`${fail.length} of ${checks} checks failed`);
