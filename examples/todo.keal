@@ -16,13 +16,21 @@ import "../kealeb.keal"
 /// is its position, so removing the first row would hand its browser node —
 /// its focus, its caret — to the task that moved up into its place.
 ///
-/// Two shapes here are the language's, not the framework's, and both are
-/// worth knowing before writing your own page. The helpers are top-level
-/// `proc`s rather than functions nested inside the factory, because
-/// `keal build` does not compile nested functions yet — it says so by name
-/// rather than getting them wrong. And they take the list and an index rather
-/// than the task itself, because the contents of a parameter belong to the
-/// caller unless the signature says `var`, and a lambda's parameter cannot.
+/// Two shapes here are the language's, not the framework's. They are written
+/// out separately because they are separate: when one of them stops being
+/// true, the other still is, and nobody should remove both in one edit.
+///
+/// **The helpers are top-level, not nested in the factory.** `keal build`
+/// does not compile nested functions — it refuses them by name rather than
+/// getting them wrong. When it does compile them, `setDone` and `forget`
+/// belong inside the factory, next to the list they act on.
+///
+/// **They take the list and an index, not the task.** The contents of a
+/// parameter belong to the caller unless the signature says `var`, and a
+/// lambda's parameter cannot say it — so a handler cannot be handed a `Task`
+/// it is allowed to change. This one is not waiting on a compiler: it follows
+/// from what a function type can express, and it would still be true with
+/// nested functions.
 
 class Task(public val id: Int, public var what: String, public var done: Bool)
 
