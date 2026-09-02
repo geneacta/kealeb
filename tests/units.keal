@@ -1,0 +1,356 @@
+/// Everything kealeb can be held to without a socket.
+///
+///     tools/test.sh
+///
+/// Each check is an `assert` with a message that says what was expected, so
+/// a failure names itself. The count at the end is the only output on
+/// success — a test suite that prints while it passes teaches people to stop
+/// reading it.
+
+import "../src/app.keal"
+import "../src/bytes.keal"
+import "../src/http.keal"
+import "../src/json.keal"
+import "../src/router.keal"
+import "../src/text.keal"
+import "../src/live.keal"
+import "../src/theme.keal"
+import "../src/ui.keal"
+import "../src/ws.keal"
+
+var checks = 0
+
+proc ok(condition: Bool, what: String) {
+    checks = checks + 1
+    assert(condition, what)
+}
+
+proc same(got: String, want: String, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected `${want}`, got `${got}`")
+}
+
+proc sameInt(got: Int, want: Int, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected ${want}, got ${got}")
+}
+
+// ------------------------------------------------------------------ bytes
+
+proc testBytes() {
+    val b = bufOf("hello")
+    same(b.all(), "hello", "a buffer holds what was put in it")
+    sameInt(b.len, 5, "five bytes")
+    same(hex(b), "68656c6c6f", "hex")
+
+    val g = buf(4)
+    g.text("abcdefghij")
+    same(g.all(), "abcdefghij", "a buffer grows")
+    ok(g.cap() >= 10, "and keeps room for what it holds")
+    g.drop(3)
+    same(g.all(), "defghij", "dropping the front keeps the rest")
+
+    sameInt(bufOf("a\r\n\r\nb").find("\r\n\r\n", 0), 1, "find")
+    sameInt(bufOf("abc").find("z", 0), -1, "find, absent")
+
+    same(base64(bufOf("")), "", "base64 of nothing")
+    same(base64(bufOf("f")), "Zg==", "base64, two pads")
+    same(base64(bufOf("fo")), "Zm8=", "base64, one pad")
+    same(base64(bufOf("foo")), "Zm9v", "base64, none")
+    same(base64(bufOf("foobar")), "Zm9vYmFy", "base64, two groups")
+
+    val back = unbase64("Zm9vYmFy")
+    ok(back != null, "base64 decodes")
+    if (back != null) { same(back.all(), "foobar", "and round-trips") }
+
+    // The three vectors every SHA-1 is checked against, and the one from
+    // RFC 6455 that the WebSocket handshake is specified by.
+    same(hex(sha1(bufOf(""))), "da39a3ee5e6b4b0d3255bfef95601890afd80709", "sha1 of nothing")
+    same(hex(sha1(bufOf("abc"))), "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 abc")
+    same(hex(sha1(bufOf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))),
+         "84983e441c3bd26ebaae4aa1f95129e5e54670f1", "sha1, two blocks")
+    same(base64(sha1(bufOf("dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))),
+         "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "the RFC 6455 accept key")
+
+    same(hex64(255), "00000000000000ff", "hex64")
+    sameInt(textBytes("héllo"), 6, "bytes are not characters")
+}
+
+// ------------------------------------------------------------------- text
+
+proc testText() {
+    same(percentDecode("a%20b"), "a b", "percent-decoding")
+    same(percentDecode("a+b", true), "a b", "plus, in a form")
+    same(percentDecode("a+b"), "a+b", "and not, in a path")
+    same(percentDecode("caf%C3%A9"), "café", "percent-decoding is bytes, then UTF-8")
+    same(percentDecode("%zz"), "%zz", "a malformed escape is left alone")
+    same(percentEncode("a b/c"), "a%20b%2Fc", "percent-encoding")
+    same(percentEncode("café"), "caf%C3%A9", "and it encodes bytes")
+
+    val f = parseForm("a=1&b=hello+world&c&a=2")
+    same(f.get("a") ?: "", "1", "the first value of a repeated field wins")
+    same(f.get("b") ?: "", "hello world", "a form's plus is a space")
+    same(f.get("c") ?: "?", "", "a field with no value is empty, not absent")
+
+    val all = parseFormAll("x=1&x=2&y=3")
+    sameInt((all.get("x") ?: []).size, 2, "every value of a repeated field")
+
+    val c = parseCookies("sid=abc; theme=dark")
+    same(c.get("sid") ?: "", "abc", "cookies")
+    same(c.get("theme") ?: "", "dark", "and the second one")
+
+    same(httpDate(784111777), "Sun, 06 Nov 1994 08:49:37 GMT", "the one date format HTTP has")
+    same(headerKey("  CoNtEnT-TyPe "), "content-type", "header names fold")
+
+    val cut = cutOn("Host: example.com:8080", ":")
+    ok(cut != null, "cutOn finds the first separator")
+    if (cut != null) {
+        same(cut.first, "Host", "the head")
+        same(cut.second, " example.com:8080", "and everything after it, once")
+    }
+}
+
+// ------------------------------------------------------------------- http
+
+proc testHttp() {
+    val head = "GET /a/b?x=1&y=deux HTTP/1.1\r\nHost: h\r\nX-A: 1\r\nX-A: 2\r\nCookie: s=t"
+    val r = parseHead(head)
+    ok(r != null, "a request parses")
+    if (r == null) { return }
+    same(r.method, "GET", "method")
+    same(r.path, "/a/b", "path")
+    same(r.target, "/a/b?x=1&y=deux", "target keeps the query")
+    same(r.queryOr("y"), "deux", "query")
+    same(r.headerOr("HOST", "?"), "h", "a header is found whatever its case")
+    same(r.headerOr("x-a", "?"), "1, 2", "a repeated header joins with a comma")
+    same(r.cookie("s") ?: "", "t", "a cookie")
+    ok(r.keepAlive(), "HTTP/1.1 keeps the connection by default")
+
+    ok(parseHead("nonsense") == null, "a line that is not a request line is refused")
+    ok(parseHead("GET /x HTTP/1.1\r\nbad header") == null, "a header with no colon is refused")
+    ok(parseHead("GET x HTTP/1.1") == null, "a target that is not a path is refused")
+
+    val old = parseHead("GET / HTTP/1.0\r\nHost: h")
+    ok(old != null, "HTTP/1.0 parses")
+    if (old != null) { ok(not old.keepAlive(), "and closes by default") }
+
+    val res = html("<p>x</p>").status(201).with("X-Made-By", "kealeb")
+    sameInt(res.code, 201, "the status is what was set")
+    same(res.headers.get("x-made-by") ?: "", "kealeb", "a response header folds too")
+    sameInt(res.length(), 8, "the body's length is in bytes")
+
+    val out = buf(256)
+    writeResponse(res, out, false, false)
+    val wire = out.all()
+    ok(wire.startsWith("HTTP/1.1 201 Created\r\n"), "the status line")
+    ok(wire.contains("\r\ncontent-length: 8\r\n"), "the length is written from the body")
+    ok(wire.contains("\r\nconnection: close\r\n"), "and the connection is told")
+    ok(wire.endsWith("\r\n\r\n<p>x</p>"), "the body follows the blank line")
+
+    val headOut = buf(256)
+    writeResponse(res, headOut, false, true)
+    ok(headOut.all().contains("content-length: 8"), "HEAD still reports the length")
+    ok(not headOut.all().endsWith("<p>x</p>"), "but sends no body")
+
+    same(statusText(404), "Not Found", "a status has a name")
+    same(statusText(499), "Client Error", "and one that has none gets its class")
+}
+
+// ----------------------------------------------------------------- routing
+
+proc testRouter() {
+    val r = Router()
+    r.get("/", { req -> text("root") })
+    r.get("/user/{id}", { req -> text("user:${req.param("id")}") })
+    r.get("/user/new", { req -> text("new") })
+    r.post("/user/{id}", { req -> text("post:${req.param("id")}") })
+    r.get("/files/{path...}", { req -> text("file:${req.param("path")}") })
+
+    same(dispatch(r, request("GET", "/")).text(), "root", "the root")
+    same(dispatch(r, request("GET", "/user/42")).text(), "user:42", "a parameter")
+    same(dispatch(r, request("GET", "/user/new")).text(), "new", "a literal beats a parameter")
+    same(dispatch(r, request("POST", "/user/7")).text(), "post:7", "the method chooses")
+    same(dispatch(r, request("GET", "/files/a/b/c.css")).text(), "file:a/b/c.css", "a tail")
+    sameInt(dispatch(r, request("GET", "/nothing")).code, 404, "nothing matches")
+
+    val wrong = dispatch(r, request("DELETE", "/user/1"))
+    sameInt(wrong.code, 405, "the path exists but not the verb")
+    same(wrong.headers.get("allow") ?: "", "GET, POST", "and it says which verbs it takes")
+
+    same(dispatch(r, request("HEAD", "/")).text(), "root", "HEAD is routed as GET")
+    same(dispatch(r, request("GET", "/user/le%20monde")).text(), "user:le monde",
+         "a parameter arrives decoded")
+
+    sameInt(segmentsOf("/a//b/").size, 2, "empty segments are dropped")
+}
+
+// ---------------------------------------------------------------- the tree
+
+proc testUi() {
+    same(render(txt("<b>&</b>")), "&lt;b&gt;&amp;&lt;/b&gt;", "text is escaped")
+    same(render(raw("<b>x</b>")), "<b>x</b>", "raw markup is not")
+    same(render(el("br")), "<br>", "a void element has no closing tag")
+    same(render(el("p").add(txt("x"))), "<p>x</p>", "an element closes")
+    same(render(el("div").cls("a").cls("b")), "<div class=\"a b\"></div>", "classes accumulate")
+    same(render(el("input").attr("value", "a\"b")), "<input value=\"a&quot;b\">",
+         "an attribute is escaped for its quotes")
+    same(render(el("input").flag("checked", true)), "<input checked=\"checked\">", "a flag that is on")
+    same(render(el("input").flag("checked", false)), "<input>", "and one that is off")
+
+    val clicked = el("button").on("click", { e -> })
+    ok(not render(clicked).contains("data-kb"), "a static page carries no event wiring")
+
+    val page = doc("T", column([h1("H")]))
+    ok(page.startsWith("<!doctype html>"), "a document starts as one")
+    ok(page.contains("<title>T</title>"), "with its title")
+    ok(page.contains("/kealeb/kealeb.css"), "and the stylesheet")
+    ok(doc("T", txt("x"), "", "").contains("<link") == false, "which can be left out")
+}
+
+// ----------------------------------------------------------------- the live
+
+/// The patches a change produces, as text, so that a test can say exactly
+/// what should have crossed the wire.
+func changes(old: Node, var now: Node): String {
+    val table: Map<String, Node> = {}
+    prepare(now, "", table)
+    val patches: List<Json> = []
+    diffNode(old, now, "", patches)
+    return jArr(patches).write()
+}
+
+proc testLive() {
+    same(mountPath, "0", "the tree is the mount point's only child")
+    val table: Map<String, Node> = {}
+    val tree = column([h1("a"), button("b", { e -> })])
+    prepare(tree, mountPath, table)
+    ok(table.containsKey("0.1"), "the button is where its path says")
+    ok(render(tree).contains("data-kb=\"0.1\""), "and carries that path")
+    ok(render(tree).contains("data-kb-on=\"click\""), "and what it listens for")
+
+    same(changes(column([h1("a")]), column([h1("a")])), "[]", "nothing changed, nothing sent")
+    same(changes(column([h1("a")]), column([h1("b")])), "[[\"t\",\"0.0\",\"b\"]]",
+         "a changed word is one patch")
+    same(changes(el("div").cls("a"), el("div").cls("b")), "[[\"a\",\"\",\"class\",\"b\"]]",
+         "a changed class is one patch")
+    same(changes(el("div").attr("x", "1"), el("div")), "[[\"d\",\"\",\"x\"]]",
+         "an attribute that went away is removed")
+    same(changes(column([h1("a")]), column([h1("a"), p("b")])),
+         "[[\"i\",\"\",\"1\",\"<p>b</p>\"]]", "a new child is inserted")
+    same(changes(column([h1("a"), p("b")]), column([h1("a")])),
+         "[[\"x\",\"\",\"1\"]]", "a child that went away is removed")
+    same(changes(column([h1("a")]), column([p("a")])),
+         "[[\"r\",\"0\",\"<p>a</p>\"]]", "a different tag is replaced whole")
+    same(changes(column([nothing()]), column([p("x")])),
+         "[[\"r\",\"0\",\"<p>x</p>\"]]", "and so is an empty placeholder that grew into one")
+    same(render(nothing()), "<!---->", "nothing is one node and no ink")
+    same(changes(column([txt("a")]), column([nothing()])),
+         "[[\"r\",\"0\",\"<!---->\"]]", "text that empties becomes that node, not empty text")
+
+    // Two children removed: the indices must still name the right ones, which
+    // is why they go backwards.
+    same(changes(column([h1("a"), p("b"), p("c")]), column([h1("a")])),
+         "[[\"x\",\"\",\"2\"],[\"x\",\"\",\"1\"]]", "removals count down")
+
+    val page = liveDoc("T", column([h1("x")]), "abc123")
+    ok(page.contains("<div id=\"kb-root\" class=\"kb-page\"><div"),
+       "the mount point holds the tree and no whitespace")
+    ok(page.contains("</div>\n<script>"), "and nothing after it either")
+    ok(page.contains("window.KB_SESSION=\"abc123\""), "and names the session")
+    ok(page.contains("/kealeb/kealeb.js"), "and loads the client")
+
+    same(acceptKey("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+         "the handshake key RFC 6455 gives as its example")
+
+    // A frame, masked the way a client must mask one.
+    val f = buf(32)
+    f.byte(0x81)
+    f.byte(0x80 bor 5)
+    f.byte(1)
+    f.byte(2)
+    f.byte(3)
+    f.byte(4)
+    val keys = [1, 2, 3, 4]
+    val payload = bufOf("hello")
+    for (i in 0..payload.len) { f.byte(payload.at(i) bxor keys[i % 4]) }
+    val frame = readFrame(f, 0, 4096)
+    ok(frame != null, "a masked text frame reads")
+    if (frame != null) {
+        sameInt(frame.opcode, opText, "as text")
+        same(frame.payload.all(), "hello", "and unmasks to what was sent")
+        sameInt(frame.used, 11, "and says how much of the buffer it took")
+    }
+
+    val short = buf(4)
+    short.byte(0x81)
+    ok(readFrame(short, 0, 4096) == null, "half a frame is not an error, it is not yet")
+
+    val unmasked = buf(8)
+    unmasked.byte(0x81)
+    unmasked.byte(1)
+    unmasked.byte(65)
+    val refused = readFrame(unmasked, 0, 4096)
+    ok(refused != null, "an unmasked frame from a client is answered")
+    if (refused != null) { sameInt(refused.opcode, opBad, "with a refusal") }
+
+    val out = buf(32)
+    writeText(out, "hi")
+    sameInt(out.at(0), 0x81, "a server frame is final text")
+    sameInt(out.at(1), 2, "unmasked, so the length is the length")
+    same(out.textAt(2, 2), "hi", "and the payload follows")
+}
+
+// ------------------------------------------------------------------- json
+
+proc testJson() {
+    val fields: Map<String, Json> = {}
+    fields.set("a", jInt(1))
+    fields.set("b", jStr("x\"y"))
+    fields.set("c", jBool(false))
+    same(jObj(fields).write(), "{\"a\":1,\"b\":\"x\\\"y\",\"c\":false}", "writing an object")
+    same(jArr([jInt(1), jNull()]).write(), "[1,null]", "writing an array")
+    same(jNum(1.5).write(), "1.5", "a number that needs its fraction")
+    same(jNum(2.0).write(), "2", "and one that does not")
+
+    val v = parseJson("{\"n\": -3, \"s\": \"caf\\u00e9\", \"a\": [true, null]}")
+    ok(v != null, "reading an object")
+    if (v == null) { return }
+    sameInt(v.intAt("n"), -3, "a negative number")
+    same(v.str("s"), "café", "a \\u escape becomes UTF-8")
+    val a = v.field("a")
+    ok(a != null, "an array field")
+    if (a != null) { sameInt(a.size(), 2, "with two elements") }
+
+    ok(parseJson("{") == null, "an object that never closes is refused")
+    ok(parseJson("[1,2] and more") == null, "and so is trailing junk")
+    ok(parseJson("nope") == null, "and a bare word")
+    val emoji = parseJson("\"\\ud83d\\ude00\"")
+    ok(emoji != null, "a surrogate pair reads")
+    if (emoji != null) { sameInt(emoji.text().length, 1, "as one character") }
+}
+
+// -------------------------------------------------------------- the assets
+
+proc testAssets() {
+    same(mimeOf("a/b/c.css"), "text/css; charset=utf-8", "a media type")
+    same(mimeOf("x.PNG"), "image/png", "whatever its case")
+    same(mimeOf("noextension"), "application/octet-stream", "and one that cannot be known")
+
+    ok(safePath("a/b.css"), "an ordinary path")
+    ok(not safePath("../etc/passwd"), "a path that climbs is refused")
+    ok(not safePath("a/../../b"), "wherever it climbs")
+    ok(not safePath("/etc/passwd"), "an absolute path is refused")
+    ok(not safePath("a\\b"), "a backslash is refused")
+    ok(not safePath(".ssh/id"), "and so is a dotfile")
+    ok(safePath("a/.b/c") == false, "at any depth")
+}
+
+testBytes()
+testText()
+testHttp()
+testRouter()
+testUi()
+testJson()
+testLive()
+testAssets()
+println("${checks} checks passed")

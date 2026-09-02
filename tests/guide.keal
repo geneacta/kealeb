@@ -1,0 +1,196 @@
+/// Every name the guide promises, used the way the guide uses it.
+///
+/// The guide is a page of code that is not compiled by anything, which is how
+/// documentation drifts. This file is the same code, compiled: if a builder is
+/// renamed, a default changes, or a field stops being public, this stops
+/// building and the guide is wrong on the same commit rather than three
+/// months later.
+///
+/// It serves nothing and opens no socket. It is a compilation, and one
+/// assertion so that running it says something.
+
+import "../kealeb.keal"
+
+val site = app("My site")
+
+// §2 — routes
+//
+// A handler held in a `val`, which is what the guide says to write. A named
+// `func` passed by name would be the obvious thing and is miscompiled by
+// `keal build` today — a bare function pointer where a closure is expected,
+// and the program dies. Reported upstream; when it is fixed, this becomes a
+// `func` and the guide says so again.
+val health = { req: Request -> text("ok") }
+
+proc routes() {
+    site.get("/health", health)
+    site.get("/health2", { req -> text("ok") })
+    site.post("/orders", { req -> jsonBody("{\"id\":7}").status(201) })
+    site.put("/orders/{id}", { req -> text("replaced ${req.param("id")}") })
+    site.patch("/orders/{id}", { req -> text("changed") })
+    site.delete("/orders/{id}", { req -> noContent() })
+    site.any("/ping", { req -> text("pong") })
+    site.get("/files/{rest...}", { req -> text(req.param("rest")) })
+}
+
+// §3 — the request
+proc reading() {
+    site.post("/search", { req ->
+        val q = req.queryOr("q", "")
+        val page = req.queryOr("page", "1").toInt() ?: 1
+        val who = req.headerOr("user-agent", "?")
+        val sid = req.cookie("session")
+        val form = req.form()
+        val all = req.formAll()
+        val body = req.text()
+        val kind = req.contentType()
+        val more = req.keepAlive() and (not req.isUpgrade())
+        val named = req.headerNames().size + req.body.len + req.query.size
+        val has = req.hasHeader("host") and (req.header("host") != null)
+        val who2 = "${req.method} ${req.path} ${req.target} ${req.version} ${req.peer}"
+        text("${q}${page}${who}${sid}${form.size}${all.size}${body}${kind}${more}${named}${has}${who2}")
+    })
+}
+
+// §4 — the response
+proc answering() {
+    val page = "<p>hi</p>"
+    val token = "abc"
+    site.get("/one", { req ->
+        html(page).status(201).type("text/html").with("x-made-by", "kealeb").cookie("sid", token, 3600)
+    })
+    site.get("/two", { req -> redirect("/next") })
+    site.get("/three", { req -> redirect("/x", 301) })
+    site.get("/four", { req -> notFound("no such order") })
+    site.get("/five", { req -> badRequest("id must be a number") })
+    site.get("/six", { req -> serverError() })
+    site.get("/seven", { req -> bytes("image/png", bufOf("not really")) })
+}
+
+// §5 — pages and the tree
+proc pages() {
+    site.page("/about", { req -> column([
+        h1("About"),
+        p("Two paragraphs and a link."),
+        link("/", "home")
+    ])}, "About us")
+
+    site.page("/tree", { req -> column([
+        el("section").cls("hero").id("top").attr("role", "banner").add(h1("Title")),
+        elt("div", [txt("text"), raw("<b>bold</b>"), nothing()]),
+        div([span("s"), strong("b"), em("i"), code("c"), pre("p"), br(), hr()]),
+        img("/logo.png", "logo"),
+        ul([li([txt("one")])]),
+        ol([li([txt("two")])]),
+        table([thead([tr([th("Name")])]), tbody([tr([tdt("Ada"), td([txt("x")])])])]),
+        section([header([txt("h")]), main([txt("m")]), footer([txt("f")])]),
+        nav([link("/", "home")]),
+        form([label("Name"), option("a", "Alpha")]),
+        h2("two"), h3("three"),
+        el("input").flag("disabled", true).title("why").style("color: red").keyed("k")
+    ])})
+}
+
+// §5 — widgets, §7 — live pages
+proc live() {
+    site.livePage("/counter", { req ->
+        var count = 0
+        view({ -> column([
+            h1("Clicked ${count} times"),
+            button("Click me", { e -> count = count + 1 })
+        ]) })
+    })
+
+    site.livePage("/widgets", { req ->
+        var name = ""
+        var on = false
+        var chosen = "a"
+        var body = ""
+        var count = 0
+        view({ -> column([
+            row([button("Save", { e -> count = count + 1 }), button("Cancel", { e -> count = 0 })]),
+            column([field(name, { e -> name = e.value }),
+                    fieldOnChange(name, { e -> name = e.value }),
+                    checkbox(on, { e -> on = e.checked() })]),
+            select(chosen, [("a", "Alpha"), ("b", "Beta")], { e -> chosen = e.value }),
+            textarea(body, { e -> body = e.value }),
+            card([shownWhen(count > 0, p("${count} waiting"))]),
+            el("form").on("submit", { e -> name = e.field("name") }),
+            el("input").on("keydown", { e -> body = "${e.name}:${e.number(0)}" })
+        ]) })
+    })
+
+    site.live.ttlMs = 300000
+    site.live.refreshAll()
+}
+
+// §6 — a form with no JavaScript
+proc formPage() {
+    site.page("/greet", { req -> column([
+        h1("Greet"),
+        el("form").attr("method", "post").add(row([
+            el("input").cls("kb-input").attr("name", "name"),
+            submit("Say hello")
+        ]))
+    ])})
+
+    site.post("/greet", { req ->
+        val name = req.form().get("name") ?: ""
+        html(doc("Greet", h1("Hello, ${name}")))
+    })
+}
+
+// §8 — static files, and the page defaults
+proc assets() {
+    site.files("/static", "./public")
+    site.file("/favicon.svg", "./public/favicon.svg")
+    site.style = "/static/app.css"
+    site.head = "<link rel=\"icon\" href=\"/favicon.svg\">"
+    site.log = false
+}
+
+// §9 — JSON
+func written(): String {
+    val fields: Map<String, Json> = {}
+    fields.set("id", jInt(7))
+    fields.set("name", jStr("Ada"))
+    fields.set("tags", jStrs(["a", "b"]))
+    return jObj(fields).write()
+}
+
+proc readJson() {
+    site.post("/orders2", { req ->
+        val body = parseJson(req.text())
+        if (body == null) { badRequest("not JSON") } else {
+            text("id ${body.intAt("id")} for ${body.str("name")}")
+        }
+    })
+}
+
+routes()
+reading()
+answering()
+pages()
+live()
+formPage()
+assets()
+readJson()
+
+// §10 — testing without a socket
+val r = Router()
+r.get("/user/{id}", { req -> text("user ${req.param("id")}") })
+assert(dispatch(r, request("GET", "/user/42")).text() == "user 42", "the parameter")
+assert(dispatch(r, request("GET", "/nope")).code == 404, "and nothing else")
+assert(written() == "{\"id\":7,\"name\":\"Ada\",\"tags\":[\"a\",\"b\"]}", "the JSON the guide writes")
+
+// §11 — the server, adjusted but never started
+val s = site.serverOn(0)
+s.maxHead = 16 * 1024
+s.maxBody = 2 * 1024 * 1024
+s.idleMs = 15000
+s.maxRequests = 500
+s.handle = { req -> dispatch(r, req) }
+assert(s.connections() == 0, "nothing is connected to a server that never opened")
+assert(site.router.size() > 20, "every route in the guide registered")
+
+println("the guide compiles")

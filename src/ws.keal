@@ -1,0 +1,135 @@
+/// WebSocket framing — RFC 6455, the parts a server needs.
+///
+/// Reading a frame and writing one, and nothing about what the frames mean.
+/// What kealeb sends through them is `live.keal`'s business; a program that
+/// wants a socket of its own can use this file and never render anything.
+///
+/// Two things this file does not do, and says so rather than half-doing:
+/// there is no `permessage-deflate`, and there are no extensions at all — the
+/// handshake never agrees to one, so nothing can arrive compressed.
+
+import "./bytes.keal"
+import "./ffi.keal"
+
+public val opContinue: Int = 0
+public val opText: Int = 1
+public val opBinary: Int = 2
+public val opClose: Int = 8
+public val opPing: Int = 9
+public val opPong: Int = 10
+/// What `readFrame` answers when the bytes are not a frame this server will
+/// take. The connection is then closed, because a stream that has been
+/// misread cannot be resynchronised.
+public val opBad: Int = -1
+
+/// The magic string RFC 6455 §1.3 specifies. It is not a secret and it is not
+/// a salt; it exists so that a server which merely echoes cannot pass for one
+/// that implements the protocol.
+val wsMagic: String = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+/// The value of `Sec-WebSocket-Accept` for a given `Sec-WebSocket-Key`.
+public func acceptKey(key: String): String {
+    return base64(sha1(bufOf(key.trim() + wsMagic)))
+}
+
+/// One frame off the wire.
+public class Frame(
+    /// The last frame of a message, or one more to come.
+    public val fin: Bool,
+    public val opcode: Int,
+    /// The payload, unmasked.
+    public val payload: Buf,
+    /// How many bytes of the buffer this frame occupied, header included.
+    public val used: Int
+)
+
+/// Read the frame starting at `from`.
+///
+/// Answers `null` when there are not enough bytes yet — the caller waits and
+/// asks again — and a frame with opcode `opBad` when what is there cannot be
+/// a frame this server accepts. Every frame from a client must be masked,
+/// which the protocol requires and which is also the check that a plain HTTP
+/// request sent to this endpoint by mistake is refused rather than read as
+/// binary.
+public func readFrame(b: Buf, from: Int, maxPayload: Int): Frame? {
+    if ((b.len - from) < 2) { return null }
+    val b0 = b.at(from)
+    val b1 = b.at(from + 1)
+    val fin = (b0 band 0x80) != 0
+    val rsv = b0 band 0x70
+    val opcode = b0 band 0x0F
+    val masked = (b1 band 0x80) != 0
+    var length = b1 band 0x7F
+    var at = from + 2
+
+    if (rsv != 0) { return bad() }
+    if (not masked) { return bad() }
+    if (length == 126) {
+        if ((b.len - at) < 2) { return null }
+        length = (b.at(at) shl 8) bor b.at(at + 1)
+        at = at + 2
+    } else if (length == 127) {
+        if ((b.len - at) < 8) { return null }
+        length = 0
+        for (i in 0..8) {
+            if (b.at(at + i) != 0) {
+                // A payload needing more than 32 bits is one this server
+                // will never accept anyway; refusing here keeps the shift
+                // below from overflowing.
+                if (i < 4) { return bad() }
+            }
+            length = (length shl 8) bor b.at(at + i)
+        }
+        at = at + 8
+    }
+    if (length > maxPayload) { return bad() }
+    if ((b.len - at) < 4) { return null }
+    val k0 = b.at(at)
+    val k1 = b.at(at + 1)
+    val k2 = b.at(at + 2)
+    val k3 = b.at(at + 3)
+    at = at + 4
+    if ((b.len - at) < length) { return null }
+
+    val payload = buf(length + 1)
+    val keys = [k0, k1, k2, k3]
+    for (i in 0..length) {
+        payload.byte(b.at(at + i) bxor keys[i % 4])
+    }
+    return Frame(fin, opcode, payload, (at + length) - from)
+}
+
+func bad(): Frame { return Frame(true, opBad, buf(1), 0) }
+
+/// Write a frame. A server never masks, which the protocol also requires.
+public proc writeFrame(out: Buf, opcode: Int, payload: Buf) {
+    out.byte(0x80 bor opcode)
+    val n = payload.len
+    if (n < 126) {
+        out.byte(n)
+    } else if (n < 65536) {
+        out.byte(126)
+        out.byte((n shr 8) band 0xFF)
+        out.byte(n band 0xFF)
+    } else {
+        out.byte(127)
+        for (i in 0..8) { out.byte((n ushr ((7 - i) * 8)) band 0xFF) }
+    }
+    out.join(payload, 0, n)
+}
+
+/// Write a text frame.
+public proc writeText(out: Buf, s: String) {
+    writeFrame(out, opText, bufOf(s))
+}
+
+/// Write a close frame carrying a status code and a reason. 1000 is *the
+/// purpose is served*, 1001 *going away*, 1002 *protocol error*, 1009 *too
+/// big*.
+public proc writeClose(out: Buf, code: Int, reason: String) {
+    val payload = buf(reason.length + 8)
+    payload.byte((code shr 8) band 0xFF)
+    payload.byte(code band 0xFF)
+    payload.text(reason)
+    writeFrame(out, opClose, payload)
+}

@@ -1,0 +1,355 @@
+/// HTTP/1.1, as far as a request and a response.
+///
+/// What a handler is given and what it gives back. The framing — how many
+/// bytes make one request, when a connection may be reused — belongs to
+/// `server.keal`; this file is the shape of the message and nothing about
+/// the socket it arrived on.
+
+import "./bytes.keal"
+import "./text.keal"
+
+// ---------------------------------------------------------------- request
+
+/// One request. Everything a handler is told about what was asked.
+public class Request(
+    /// `GET`, `POST`, … — upper case, as sent.
+    public val method: String,
+    /// The request target exactly as it arrived, query string included.
+    public val target: String,
+    /// The path, percent-decoded. `/user/le%20monde` is `/user/le monde`.
+    public val path: String,
+    /// The query string, parsed. `?a=1&b=2`.
+    public val query: Map<String, String>,
+    /// `HTTP/1.1`, or `HTTP/1.0` from something old.
+    public val version: String,
+    /// Header names lower-cased; a header sent twice arrives joined by `, `,
+    /// which is what the protocol says it means.
+    package val headers: Map<String, String>,
+    /// The body's bytes. Empty when there was none.
+    public var body: Buf,
+    /// What the route's pattern captured — `/user/{id}` puts `id` here.
+    /// Filled by `withParams` before the handler sees the request; a handler
+    /// is given the answer rather than the chance to change the question.
+    public val params: Map<String, String>,
+    /// The peer's address, or `""`.
+    public var peer: String
+) {
+    /// A header by name, case-insensitively, or `null`.
+    public func header(name: String): String? { return this.headers.get(headerKey(name)) }
+
+    /// A header, or `fallback` when it was not sent.
+    public func headerOr(name: String, fallback: String): String {
+        return this.headers.get(headerKey(name)) ?: fallback
+    }
+
+    /// Does it have this header at all?
+    public func hasHeader(name: String): Bool { return this.headers.containsKey(headerKey(name)) }
+
+    /// Every header, lower-cased names. Reading them all is rare; reading one
+    /// is what `header` is for.
+    public func headerNames(): List<String> { return this.headers.keys() }
+
+    /// A path parameter — `""` when the route did not capture one by that
+    /// name, because a route that captured `{id}` always has an `id` and
+    /// asking for a name no route mentions is a mistake in the program, not
+    /// a condition to handle at run time.
+    public func param(name: String): String { return this.params.get(name) ?: "" }
+
+    /// A query parameter, or `fallback`.
+    public func queryOr(name: String, fallback: String = ""): String {
+        return this.query.get(name) ?: fallback
+    }
+
+    /// The `Cookie:` header, parsed.
+    public func cookies(): Map<String, String> {
+        return parseCookies(this.headerOr("cookie", ""))
+    }
+
+    /// One cookie, or `null`.
+    public func cookie(name: String): String? { return this.cookies().get(name) }
+
+    /// The body as text. Bytes that are not UTF-8 arrive as U+FFFD.
+    public func text(): String { return this.body.all() }
+
+    /// The body read as a form — `application/x-www-form-urlencoded`, which
+    /// is what an HTML `<form>` posts unless it says otherwise.
+    public func form(): Map<String, String> { return parseForm(this.body.all()) }
+
+    /// The same, keeping every value of a repeated field.
+    public func formAll(): Map<String, List<String>> { return parseFormAll(this.body.all()) }
+
+    /// The media type without its parameters: `text/html` from
+    /// `text/html; charset=utf-8`.
+    public func contentType(): String {
+        return before(this.headerOr("content-type", ""), ";").trim().toLower()
+    }
+
+    /// May the connection carry another request after this one? HTTP/1.1
+    /// says yes unless told otherwise, HTTP/1.0 says no unless told to.
+    public func keepAlive(): Bool {
+        val c = this.headerOr("connection", "").toLower()
+        if (c.contains("close")) { return false }
+        if (this.version == "HTTP/1.0") { return c.contains("keep-alive") }
+        return true
+    }
+
+    /// Is this a browser asking to turn the connection into a WebSocket?
+    public func isUpgrade(): Bool {
+        return this.headerOr("upgrade", "").toLower().contains("websocket") and
+               this.headerOr("connection", "").toLower().contains("upgrade")
+    }
+}
+
+/// A request with nothing in it — the starting point a parser fills, and what
+/// a test hands a handler.
+public func request(method: String, target: String): Request {
+    val cut = cutOn(target, "?")
+    var path = target
+    var qs = ""
+    if (cut != null) { path = cut.first; qs = cut.second }
+    val headers: Map<String, String> = {}
+    val params: Map<String, String> = {}
+    return Request(method.toUpper(), target, percentDecode(path), parseForm(qs),
+                   "HTTP/1.1", headers, buf(16), params, "")
+}
+
+/// Parse a request head — everything up to and not including the blank line.
+/// Answers `null` when it is not one, which for a server means 400 and a
+/// closed connection rather than a guess.
+public func parseHead(head: String): Request? {
+    val lines = head.split("\r\n")
+    if (lines.size == 0) { return null }
+    val start = lines[0].split(" ")
+    if (start.size < 3) { return null }
+    val method = start[0]
+    val target = start[1]
+    val version = start[2]
+    if (not version.startsWith("HTTP/")) { return null }
+    if (method.isEmpty() or (not target.startsWith("/"))) { return null }
+
+    val headers: Map<String, String> = {}
+    var i = 1
+    while (i < lines.size) {
+        val line = lines[i]
+        i = i + 1
+        if (line.isEmpty()) { continue }
+        val cut = cutOn(line, ":")
+        if (cut == null) { return null }
+        val name = headerKey(cut.first)
+        if (name.isEmpty()) { return null }
+        val value = cut.second.trim()
+        val had = headers.get(name)
+        if (had == null) { headers.set(name, value) } else { headers.set(name, "${had}, ${value}") }
+    }
+
+    val cut = cutOn(target, "?")
+    var path = target
+    var qs = ""
+    if (cut != null) { path = cut.first; qs = cut.second }
+    val params: Map<String, String> = {}
+    return Request(method.toUpper(), target, percentDecode(path), parseForm(qs),
+                   version, headers, buf(16), params, "")
+}
+
+/// The same request, with the route's captures in place.
+///
+/// It is a new `Request` rather than a field written on the old one, and the
+/// reason is the language: the contents of a parameter belong to the caller,
+/// and a function type cannot say `var`, so a handler could never be handed a
+/// request it was allowed to change. Rebuilding it shares the body, the
+/// headers and the query — nine references — and buys a dispatch path with no
+/// mutation anywhere in it.
+public func withParams(req: Request, params: Map<String, String>): Request {
+    return Request(req.method, req.target, req.path, req.query, req.version,
+                   req.headers, req.body, params, req.peer)
+}
+
+// --------------------------------------------------------------- response
+
+/// One response. Built by the helpers below and adjusted by the `with`
+/// methods, each of which answers the response so that a line reads as one
+/// thing: `html(page).status(201).cookie("id", token)`.
+public class Response(
+    /// The status code. 200 unless something says otherwise.
+    public var code: Int,
+    package var headers: Map<String, String>,
+    /// `Set-Cookie` is the one header a response may repeat, so it is not in
+    /// the map with the others.
+    package var setCookies: List<String>,
+    package var body: Buf,
+    /// Set when this response is not a response at all but the server's
+    /// instruction to take the connection over — the WebSocket upgrade.
+    package var upgrade: Bool
+) {
+    /// Set a header, replacing any of that name.
+    public func with(name: String, value: String): Response {
+        this.headers.set(headerKey(name), value)
+        return this
+    }
+
+    /// Set the status code.
+    public func status(c: Int): Response {
+        this.code = c
+        return this
+    }
+
+    /// Set `Content-Type`.
+    public func type(ct: String): Response { return this.with("content-type", ct) }
+
+    /// Add a cookie. `maxAge` in seconds; a negative one means *this session*
+    /// and no `Max-Age` at all, 0 means delete it.
+    public func cookie(name: String, value: String, maxAge: Int = -1,
+                       path: String = "/", httpOnly: Bool = true,
+                       sameSite: String = "Lax"): Response {
+        val parts: List<String> = ["${name}=${percentEncode(value)}", "Path=${path}"]
+        if (maxAge >= 0) { parts.add("Max-Age=${maxAge}") }
+        if (httpOnly) { parts.add("HttpOnly") }
+        if (not sameSite.isEmpty()) { parts.add("SameSite=${sameSite}") }
+        this.setCookies.add(parts.join("; "))
+        return this
+    }
+
+    /// How many bytes the body is.
+    public func length(): Int { return this.body.len }
+
+    /// The body as text — what a test asserts on.
+    public func text(): String { return this.body.all() }
+}
+
+func responseOf(code: Int, contentType: String, body: Buf): Response {
+    val headers: Map<String, String> = {}
+    if (not contentType.isEmpty()) { headers.set("content-type", contentType) }
+    val cookies: List<String> = []
+    return Response(code, headers, cookies, body, false)
+}
+
+/// A response with a body of bytes and a media type of your choosing.
+public func bytes(contentType: String, body: Buf): Response {
+    return responseOf(200, contentType, body)
+}
+
+/// `text/html; charset=utf-8`.
+public func html(body: String): Response {
+    return responseOf(200, "text/html; charset=utf-8", bufOf(body))
+}
+
+/// `text/plain; charset=utf-8`.
+public func text(body: String): Response {
+    return responseOf(200, "text/plain; charset=utf-8", bufOf(body))
+}
+
+/// `application/json`. The body is taken as already-encoded JSON — see
+/// `json.keal` for building it.
+public func jsonBody(body: String): Response {
+    return responseOf(200, "application/json", bufOf(body))
+}
+
+/// 204, and nothing at all.
+public func noContent(): Response { return responseOf(204, "", buf(16)) }
+
+/// A redirect. 302 by default — 303 after a form, 301 when it is permanent
+/// and you are sure.
+public func redirect(to: String, code: Int = 302): Response {
+    return responseOf(code, "text/html; charset=utf-8",
+                      bufOf("<p><a href=\"${to}\">${to}</a></p>")).with("location", to)
+}
+
+/// The three failures a framework should make it easy to be honest about.
+public func notFound(message: String = "Not found"): Response {
+    return responseOf(404, "text/plain; charset=utf-8", bufOf(message))
+}
+
+public func badRequest(message: String = "Bad request"): Response {
+    return responseOf(400, "text/plain; charset=utf-8", bufOf(message))
+}
+
+public func serverError(message: String = "Internal server error"): Response {
+    return responseOf(500, "text/plain; charset=utf-8", bufOf(message))
+}
+
+// ----------------------------------------------------------- on to the wire
+
+/// What the number means. The list is the codes a server actually sends;
+/// anything else goes out with its class's name, which is what a client
+/// reads anyway.
+public func statusText(code: Int): String {
+    return when (code) {
+        100 -> "Continue"
+        101 -> "Switching Protocols"
+        200 -> "OK"
+        201 -> "Created"
+        202 -> "Accepted"
+        204 -> "No Content"
+        206 -> "Partial Content"
+        301 -> "Moved Permanently"
+        302 -> "Found"
+        303 -> "See Other"
+        304 -> "Not Modified"
+        307 -> "Temporary Redirect"
+        308 -> "Permanent Redirect"
+        400 -> "Bad Request"
+        401 -> "Unauthorized"
+        403 -> "Forbidden"
+        404 -> "Not Found"
+        405 -> "Method Not Allowed"
+        408 -> "Request Timeout"
+        409 -> "Conflict"
+        413 -> "Payload Too Large"
+        414 -> "URI Too Long"
+        415 -> "Unsupported Media Type"
+        422 -> "Unprocessable Content"
+        426 -> "Upgrade Required"
+        429 -> "Too Many Requests"
+        431 -> "Request Header Fields Too Large"
+        500 -> "Internal Server Error"
+        501 -> "Not Implemented"
+        503 -> "Service Unavailable"
+        504 -> "Gateway Timeout"
+        else -> when {
+            code < 200 -> "Informational"
+            code < 300 -> "Success"
+            code < 400 -> "Redirection"
+            code < 500 -> "Client Error"
+            else -> "Server Error"
+        }
+    }
+}
+
+/// The 101 that turns a connection into something else. `headers` are written
+/// as given; there is no body and no `Content-Length`, because after this
+/// response the bytes stop being HTTP.
+public func switching(headers: Map<String, String>): Response {
+    val cookies: List<String> = []
+    return Response(101, headers, cookies, buf(16), true)
+}
+
+/// Write a protocol switch. Separate from `writeResponse` because everything
+/// that function guarantees — a length, a connection header — is exactly what
+/// must not be written here.
+public proc writeSwitch(res: Response, out: Buf) {
+    out.text("HTTP/1.1 ${res.code} ${statusText(res.code)}\r\n")
+    for (name in res.headers.keys()) {
+        out.text("${name}: ${res.headers.get(name) ?: ""}\r\n")
+    }
+    out.text("\r\n")
+}
+
+/// Serialise a response into `out`, ready to be sent.
+///
+/// `Content-Length` is written from the body's byte count and cannot be
+/// overridden: a length that disagrees with the body is the one framing bug
+/// that breaks the *next* request rather than this one, and it is worth
+/// refusing the chance to write it.
+public proc writeResponse(res: Response, out: Buf, keepAlive: Bool, headOnly: Bool) {
+    out.text("HTTP/1.1 ${res.code} ${statusText(res.code)}\r\n")
+    out.text("date: ${httpDate(epochS())}\r\n")
+    for (name in res.headers.keys()) {
+        if ((name == "content-length") or (name == "connection")) { continue }
+        out.text("${name}: ${res.headers.get(name) ?: ""}\r\n")
+    }
+    for (c in res.setCookies) { out.text("set-cookie: ${c}\r\n") }
+    out.text("content-length: ${res.body.len}\r\n")
+    out.text(keepAlive ? "connection: keep-alive\r\n" : "connection: close\r\n")
+    out.text("\r\n")
+    if (not headOnly) { out.join(res.body, 0, res.body.len) }
+}

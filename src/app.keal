@@ -1,0 +1,265 @@
+/// The front door.
+///
+/// Everything below is a convenience over `Router` and `Server`, which are
+/// the real objects and remain available. An application that outgrows this
+/// file keeps its handlers and stops calling `app()`; nothing here is load
+/// bearing.
+///
+///     val a = app()
+///     a.page("/", { req -> column([h1("Hello"), p("from Keal")]) })
+///     a.run(8080)
+
+import "./bytes.keal"
+import "./ffi.keal"
+import "./http.keal"
+import "./live.keal"
+import "./router.keal"
+import "./server.keal"
+import "./text.keal"
+import "./theme.keal"
+import "./ui.keal"
+import "./ws.keal"
+
+/// An application: a routing table, a title, and the defaults a page gets.
+public class App(
+    /// The table every registration lands in.
+    public val router: Router,
+    /// What `page` puts in `<title>` unless told otherwise.
+    public var title: String,
+    /// Markup added to every page's `<head>`.
+    public var head: String,
+    /// The stylesheet every page links. `""` for none.
+    public var style: String,
+    /// One line of log per request.
+    public var log: Bool,
+    /// Every live page this application has open.
+    public val live: Hub
+) {
+    // ------------------------------------------------------------- routes
+
+    public proc get(path: String, handler: (Request) -> Response) { this.router.get(path, handler) }
+    public proc post(path: String, handler: (Request) -> Response) { this.router.post(path, handler) }
+    public proc put(path: String, handler: (Request) -> Response) { this.router.put(path, handler) }
+    public proc patch(path: String, handler: (Request) -> Response) { this.router.patch(path, handler) }
+    public proc delete(path: String, handler: (Request) -> Response) { this.router.delete(path, handler) }
+    public proc any(path: String, handler: (Request) -> Response) { this.router.any(path, handler) }
+
+    /// A page: a function from a request to a tree, wrapped in a whole
+    /// document and sent. This is the static half of the framework — every
+    /// byte is computed once, there is no JavaScript, and the result works in
+    /// anything that can read HTML.
+    public proc page(path: String, build: (Request) -> Node, title: String = "") {
+        val t = title.isEmpty() ? this.title : title
+        val head = this.head
+        val style = this.style
+        this.router.get(path, { req -> html(doc(t, build(req), head, style)) })
+    }
+
+    /// A page that also answers `POST` — the shape a form takes when it is
+    /// written without any JavaScript: `build` renders, `submit` acts and
+    /// answers a redirect or a tree of its own.
+    public proc formPage(path: String, build: (Request) -> Node,
+                         onPost: (Request) -> Response, title: String = "") {
+        this.page(path, build, title)
+        this.router.post(path, onPost)
+    }
+
+    /// A live page.
+    ///
+    /// `open` is called once per visitor, and what it answers is called again
+    /// after every event. The state a page keeps is whatever `open` closes
+    /// over, so it is per visitor by construction — there is no session map to
+    /// remember to key correctly.
+    ///
+    ///     site.livePage("/", { req ->
+    ///         var count = 0
+    ///         view({ -> column([
+    ///             h1("Clicked ${count} times"),
+    ///             button("Click me", { e -> count = count + 1 })
+    ///         ]) })
+    ///     })
+    public proc livePage(path: String, open: (Request) -> View, title: String = "") {
+        val t = title.isEmpty() ? this.title : title
+        val head = this.head
+        val style = this.style
+        val pages = this.live
+        this.router.get(path, { req -> html(pages.begin(open(req), t, head, style)) })
+    }
+
+    // ------------------------------------------------------------- assets
+
+    /// Serve a directory. `/static/{path...}` under `prefix`, read from
+    /// `dir`. A path that tries to leave the directory is a 403, not a
+    /// cleverly normalised 200.
+    public proc files(prefix: String, dir: String) {
+        val root = dir.endsWith("/") ? dir.substring(0, dir.length - 1) : dir
+        val at = prefix.endsWith("/") ? prefix.substring(0, prefix.length - 1) : prefix
+        this.router.get("${at}/{path...}", { req -> serveFile(root, req.param("path"), req.headerOr("if-none-match", "")) })
+    }
+
+    /// Serve one file at one path — a favicon, a `robots.txt`.
+    public proc file(path: String, filePath: String) {
+        this.router.get(path, { req -> serveFile("", filePath, req.headerOr("if-none-match", "")) })
+    }
+
+    // ---------------------------------------------------------------- run
+
+    /// Build the server this application describes, without starting it.
+    /// A test wants this: `open()` for the port, `tick()` to drive it.
+    public func serverOn(port: Int, host: String = "127.0.0.1"): Server {
+        this.mount()
+        val s = server(this.router, port, host)
+        s.log = this.log
+        val pages = this.live
+        pages.host = s
+        s.onOpen = { fd: Int, req: Request -> pages.opened(fd, req.queryOr("s")) }
+        s.onMessage = { fd: Int, message: String -> pages.receive(fd, message) }
+        s.onClose = { fd: Int -> pages.detach(fd) }
+        return s
+    }
+
+    /// Serve, until the process is stopped.
+    public proc run(port: Int = 8080, host: String = "127.0.0.1") {
+        this.serverOn(port, host).run()
+    }
+
+    /// Register what every kealeb application answers. Called by `serverOn`;
+    /// calling it twice is harmless because a later route never shadows an
+    /// earlier one of the same shape — the first wins, and these are first
+    /// only if nothing else claimed the path.
+    package proc mount() {
+        if (this.mounted) { return }
+        this.mounted = true
+        // The local copy is not a style: the C backend cannot yet compile a
+        // lambda that captures a top-level binding from another module, and
+        // this is the smallest thing that keeps the capture local.
+        val css = stylesheet
+        val js = clientScript
+        this.router.get("/kealeb/kealeb.css",
+            { req -> text(css).type("text/css; charset=utf-8").with("cache-control", "max-age=300") })
+        this.router.get("/kealeb/kealeb.js",
+            { req -> text(js).type("text/javascript; charset=utf-8").with("cache-control", "max-age=300") })
+        this.router.get("/kealeb/live", { req -> upgradeToSocket(req) })
+    }
+
+    package var mounted: Bool = false
+}
+
+/// A new application, with the defaults a first program wants.
+public func app(title: String = "kealeb"): App {
+    return App(Router(), title, "", "/kealeb/kealeb.css", true, hub())
+}
+
+/// Answer a browser asking to turn this connection into a WebSocket.
+///
+/// The three checks are the protocol's, in the order it states them, and each
+/// refusal says which one failed — an upgrade that fails silently is an
+/// afternoon nobody gets back.
+public func upgradeToSocket(req: Request): Response {
+    if (not req.isUpgrade()) {
+        return badRequest("/kealeb/live is a WebSocket endpoint").status(426).with("upgrade", "websocket")
+    }
+    if (req.headerOr("sec-websocket-version", "") != "13") {
+        return badRequest("this server speaks WebSocket version 13").with("sec-websocket-version", "13")
+    }
+    val key = req.headerOr("sec-websocket-key", "")
+    if (key.isEmpty()) {
+        return badRequest("no Sec-WebSocket-Key")
+    }
+    val headers: Map<String, String> = {}
+    headers.set("upgrade", "websocket")
+    headers.set("connection", "Upgrade")
+    headers.set("sec-websocket-accept", acceptKey(key))
+    return switching(headers)
+}
+
+// ------------------------------------------------------------ static files
+
+/// What an extension means. Short on purpose: a type nobody serves is a type
+/// nobody has to read past.
+public func mimeOf(path: String): String {
+    val dot = path.reversed().indexOf(".")
+    if (dot < 0) { return "application/octet-stream" }
+    val ext = path.substring(path.length - dot, path.length).toLower()
+    return when (ext) {
+        "html" -> "text/html; charset=utf-8"
+        "htm" -> "text/html; charset=utf-8"
+        "css" -> "text/css; charset=utf-8"
+        "js" -> "text/javascript; charset=utf-8"
+        "mjs" -> "text/javascript; charset=utf-8"
+        "json" -> "application/json"
+        "txt" -> "text/plain; charset=utf-8"
+        "md" -> "text/markdown; charset=utf-8"
+        "csv" -> "text/csv; charset=utf-8"
+        "xml" -> "application/xml"
+        "svg" -> "image/svg+xml"
+        "png" -> "image/png"
+        "jpg" -> "image/jpeg"
+        "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "avif" -> "image/avif"
+        "ico" -> "image/x-icon"
+        "woff" -> "font/woff"
+        "woff2" -> "font/woff2"
+        "ttf" -> "font/ttf"
+        "otf" -> "font/otf"
+        "pdf" -> "application/pdf"
+        "wasm" -> "application/wasm"
+        "zip" -> "application/zip"
+        "mp3" -> "audio/mpeg"
+        "mp4" -> "video/mp4"
+        "webm" -> "video/webm"
+        else -> "application/octet-stream"
+    }
+}
+
+/// Is this a path a request is allowed to name?
+///
+/// The rule is refusal rather than normalisation: any `..` segment, any
+/// leading `/`, any backslash, and any NUL is a 403. Normalising a hostile
+/// path is how a directory gets escaped — the fix is to not accept one.
+public func safePath(rel: String): Bool {
+    if (rel.isEmpty()) { return false }
+    if (rel.startsWith("/") or rel.contains("\\")) { return false }
+    for (part in rel.split("/")) {
+        if (part == "..") { return false }
+        if (part.startsWith(".") and (part.length > 1)) { return false }
+    }
+    return true
+}
+
+/// Read a file and answer it, or answer why not.
+///
+/// The ETag is the file's timestamp and size, which is what a cache needs and
+/// all a static file can honestly promise; a client that sends it back gets a
+/// 304 and no body.
+public func serveFile(root: String, rel: String, ifNoneMatch: String = ""): Response {
+    if (not root.isEmpty()) {
+        if (not safePath(rel)) { return notFound("Forbidden").status(403) }
+    }
+    val path = root.isEmpty() ? rel : "${root}/${rel}"
+    val stamp = fileMtime(path)
+    if (stamp < 0) { return notFound("No such file: ${rel}") }
+    val tag = "\"${stamp}-${fileSizeOf(path)}\""
+    if (ifNoneMatch.contains(tag)) {
+        return noContent().status(304).with("etag", tag)
+    }
+    val h = fileRead(path)
+    if (h == 0) { return notFound("Could not read ${rel}").status(500) }
+    val size = blobSize(h)
+    val body = buf(size)
+    body.raw(h, 0, size)
+    blobFree(h)
+    return bytes(mimeOf(path), body).with("etag", tag).with("last-modified", httpDate(stamp))
+}
+
+/// How big a file is, without reading it. Two `stat`s beat reading a file
+/// that a cache is about to be told it already has.
+func fileSizeOf(path: String): Int {
+    val h = fileRead(path)
+    if (h == 0) { return -1 }
+    val n = blobSize(h)
+    blobFree(h)
+    return n
+}

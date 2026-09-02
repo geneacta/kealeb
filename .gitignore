@@ -1,0 +1,9 @@
+build/
+.work/
+*.c
+!runtime/*.c
+.DS_Store
+
+# stray executables `keal build` leaves in the working directory
+/repro
+/t[0-9]*

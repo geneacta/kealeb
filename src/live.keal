@@ -1,0 +1,456 @@
+/// Live pages: the tree lives on the server, and only the difference travels.
+///
+/// A live page is a function from a session's own state to a tree of
+/// components — the same tree `ui.keal` describes and the same one a static
+/// page renders. The difference is what happens next. The tree is kept; when
+/// an event arrives the handler runs, the tree is built again, the two are
+/// compared, and what crosses the socket is the list of changes. The browser
+/// never learns what the program knows, and the program never writes any
+/// JavaScript.
+///
+/// That is Vaadin's bargain, and its cost is the honest one: the server holds
+/// a session per open page, and a page that is open is a page that is using
+/// memory. `ttlMs` is how long a session outlives its socket.
+///
+/// The identity of a node is its position — `0.2.1`, the path from the mount
+/// point. Moving a node therefore rewrites it. A keyed list would fix that
+/// and is not here yet; what is here is one rule with no exceptions, which is
+/// worth more at this stage than a fast path with several.
+
+import "./bytes.keal"
+import "./ffi.keal"
+import "./http.keal"
+import "./json.keal"
+import "./router.keal"
+import "./server.keal"
+import "./text.keal"
+import "./theme.keal"
+import "./ui.keal"
+import "./ws.keal"
+
+/// A page's view: the function that turns this session's state into a tree.
+/// It is called once per event, and it must be a function of the state and
+/// nothing else — anything it reads that can change without an event will not
+/// be noticed until the next one.
+public class View(public val build: () -> Node)
+
+/// Wrap a builder as a view.
+public func view(build: () -> Node): View { return View(build) }
+
+/// One open page.
+public class Session(
+    public val id: String,
+    package val page: View,
+    package var tree: Node,
+    package var table: Map<String, Node>,
+    /// The socket this page is talking on, or -1 between the first GET and
+    /// the WebSocket, and again after it drops.
+    package var fd: Int,
+    package var lastMs: Int
+)
+
+/// Every open page, and the socket each is on.
+public class Hub(
+    package var sessions: Map<String, Session>,
+    package var byFd: Map<Int, String>,
+    /// How long a session survives with no socket. A page that is reloaded
+    /// gets a new session; this is for the tab that went to sleep.
+    public var ttlMs: Int,
+    /// The server, held weakly so that the hub the server points at does not
+    /// keep the server alive: `server -> onMessage -> hub -> server` is a
+    /// cycle, and `weak` is how Keal says which edge is the back one.
+    package weak var host: Server?
+) {
+    /// How many pages are open.
+    public func size(): Int { return this.sessions.size }
+
+    /// Start a session for a page, and answer the HTML that opens it.
+    package func begin(page: View, title: String, head: String, style: String): String {
+        val id = hex64(secureRandom())
+        val table: Map<String, Node> = {}
+        val tree = page.build()
+        prepare(tree, mountPath, table)
+        val s = Session(id, page, tree, table, -1, monoMs())
+        this.sessions.set(id, s)
+        return liveDoc(title, tree, id, head, style)
+    }
+
+    /// Bind a socket to the session named in the query. Answers false when
+    /// there is no such session, which is what a reloaded server looks like
+    /// from a page that was open before it restarted.
+    package func attach(fd: Int, id: String): Bool {
+        val s = this.sessions.get(id)
+        if (s == null) { return false }
+        s.fd = fd
+        s.lastMs = monoMs()
+        this.byFd.set(fd, id)
+        return true
+    }
+
+    /// A socket arrived. Either it names a session this hub still has, or the
+    /// page is told to ask for a new one.
+    package proc opened(fd: Int, id: String) {
+        if (this.attach(fd, id)) { return }
+        val host = this.host
+        if (host == null) { return }
+        val body: Map<String, Json> = {}
+        body.set("gone", jInt(1))
+        host.send(fd, jObj(body).write())
+    }
+
+    package proc detach(fd: Int) {
+        val id = this.byFd.get(fd)
+        if (id == null) { return }
+        this.byFd.remove(fd)
+        val s = this.sessions.get(id)
+        if (s == null) { return }
+        s.fd = -1
+        s.lastMs = monoMs()
+    }
+
+    /// One message from a page. Everything a live page does arrives here.
+    package proc receive(fd: Int, message: String) {
+        val id = this.byFd.get(fd)
+        if (id == null) { return }
+        val s = this.sessions.get(id)
+        if (s == null) { return }
+        s.lastMs = monoMs()
+
+        val msg = parseJson(message)
+        if (msg == null) { return }
+        if (msg.str("e") == "hello") { return }
+
+        val node = s.table.get(msg.str("i"))
+        if (node == null) { return }
+        val handler = node.handlers.get(msg.str("e"))
+        if (handler == null) { return }
+
+        val fields: Map<String, String> = {}
+        val f = msg.field("f")
+        if (f != null) {
+            for (name in f.names()) { fields.set(name, f.str(name)) }
+        }
+        handler(Ev(msg.str("e"), msg.str("v"), fields))
+        this.refresh(s)
+    }
+
+    /// Build the tree again, compare it with the one on screen, and send the
+    /// difference. Called after every event; call it yourself when something
+    /// outside the page changed what the page shows.
+    public proc refresh(var s: Session) {
+        val table: Map<String, Node> = {}
+        val next = s.page.build()
+        prepare(next, mountPath, table)
+        val patches: List<Json> = []
+        diffNode(s.tree, next, mountPath, patches)
+        s.tree = next
+        s.table = table
+        if (patches.isEmpty()) { return }
+        if (s.fd < 0) { return }
+        val host = this.host
+        if (host == null) { return }
+        val body: Map<String, Json> = {}
+        body.set("p", jArr(patches))
+        host.send(s.fd, jObj(body).write())
+    }
+
+    /// Rebuild every open page. What a program calls when the world changed
+    /// under all of them at once — a row was inserted, a job finished.
+    public proc refreshAll() {
+        for (id in this.sessions.keys()) {
+            val s = this.sessions.get(id)
+            if (s != null) { this.refresh(s) }
+        }
+    }
+
+    /// Forget the sessions whose page is gone.
+    public proc sweep() {
+        val now = monoMs()
+        val doomed: List<String> = []
+        for (id in this.sessions.keys()) {
+            val s = this.sessions.get(id)
+            if (s == null) { continue }
+            if ((s.fd < 0) and ((now - s.lastMs) > this.ttlMs)) { doomed.add(id) }
+        }
+        for (id in doomed) { this.sessions.remove(id) }
+    }
+}
+
+/// A hub with nothing open.
+public func hub(): Hub {
+    val sessions: Map<String, Session> = {}
+    val byFd: Map<Int, String> = {}
+    return Hub(sessions, byFd, 60000, null)
+}
+
+/// Where the tree hangs.
+///
+/// The mount point is a `<div id="kb-root">` and the tree is its **only**
+/// child, so every path the server assigns starts at 0 and the client can
+/// address a node by counting child nodes from the mount. Getting this off by
+/// one level is a bug that renders correctly and then patches the wrong node
+/// on the second event, which is why it is a named constant rather than an
+/// empty string written in three places.
+public val mountPath: String = "0"
+
+// ------------------------------------------------------------- identifying
+
+/// Number the nodes that listen, by their position, and record where each
+/// one is. `data-kb` is an ordinary attribute from here on, which is what
+/// lets the diff notice when it changes rather than needing a rule of its own.
+public proc prepare(var node: Node, path: String, var table: Map<String, Node>) {
+    if (not node.handlers.isEmpty()) {
+        node.attrs.set("data-kb", path)
+        node.attrs.set("data-kb-on", node.handlers.keys().join(" "))
+        table.set(path, node)
+    }
+    var i = 0
+    for (k in node.kids) {
+        prepare(k, path.isEmpty() ? "${i}" : "${path}.${i}", table)
+        i = i + 1
+    }
+}
+
+func childPath(path: String, i: Int): String {
+    return path.isEmpty() ? "${i}" : "${path}.${i}"
+}
+
+// --------------------------------------------------------------- the diff
+
+func patch3(op: String, path: String, a: String): Json {
+    return jArr([jStr(op), jStr(path), jStr(a)])
+}
+
+func patch4(op: String, path: String, a: String, b: String): Json {
+    return jArr([jStr(op), jStr(path), jStr(a), jStr(b)])
+}
+
+/// Compare two trees and write what changed into `out`.
+///
+/// Six operations, and no seventh: set a text node's text, set an attribute,
+/// remove an attribute, replace a node, insert a child, remove a child. A
+/// browser can do each of them in one call, which is why the list is this one
+/// and not a shorter one that needs interpretation at the other end.
+public proc diffNode(old: Node, now: Node, path: String, var out: List<Json>) {
+    if (old.tag != now.tag) {
+        out.add(patch3("r", path, render(now)))
+        return
+    }
+    if (now.tag == textTag) {
+        if (old.value == now.value) { return }
+        // Empty text is a comment and non-empty text is a text node, so the
+        // change between them is a different kind of node, not a new value.
+        if (old.value.isEmpty() or now.value.isEmpty()) {
+            out.add(patch3("r", path, render(now)))
+        } else {
+            out.add(patch3("t", path, now.value))
+        }
+        return
+    }
+    if (now.tag == rawTag) {
+        if (old.value != now.value) { out.add(patch3("r", path, render(now))) }
+        return
+    }
+
+    for (name in now.attrs.keys()) {
+        val v = now.attrs.get(name) ?: ""
+        val had = old.attrs.get(name)
+        if ((had == null) or (had != v)) { out.add(patch4("a", path, name, v)) }
+    }
+    for (name in old.attrs.keys()) {
+        if (not now.attrs.containsKey(name)) { out.add(patch3("d", path, name)) }
+    }
+
+    val shared = old.kids.size.min(now.kids.size)
+    var i = 0
+    while (i < shared) {
+        diffNode(old.kids[i], now.kids[i], childPath(path, i), out)
+        i = i + 1
+    }
+    if (now.kids.size > shared) {
+        var k = shared
+        while (k < now.kids.size) {
+            out.add(patch4("i", path, "${k}", render(now.kids[k])))
+            k = k + 1
+        }
+    } else if (old.kids.size > shared) {
+        // Backwards, so that each index still names the child it named when
+        // the list was made.
+        var k = old.kids.size - 1
+        while (k >= shared) {
+            out.add(patch3("x", path, "${k}"))
+            k = k - 1
+        }
+    }
+}
+
+// ------------------------------------------------------------- the document
+
+/// The document a live page arrives in. The mount point holds the rendered
+/// tree and **nothing else** — not a newline — because the client addresses a
+/// node by counting child nodes, and a stray text node is an off-by-one that
+/// only shows up on the second event.
+public func liveDoc(title: String, tree: Node, sessionId: String,
+                    head: String = "", style: String = "/kealeb/kealeb.css"): String {
+    val out = buf(4096)
+    out.text("<!doctype html>\n<html lang=\"en\">\n<head>\n")
+    out.text("<meta charset=\"utf-8\">\n")
+    out.text("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    out.text("<title>${escape(title)}</title>\n")
+    if (not style.isEmpty()) {
+        out.text("<link rel=\"stylesheet\" href=\"${escapeAttr(style)}\">\n")
+    }
+    if (not head.isEmpty()) { out.text(head + "\n") }
+    out.text("</head>\n<body>\n")
+    out.text("<div id=\"kb-root\" class=\"kb-page\">")
+    renderInto(tree, out)
+    out.text("</div>\n")
+    out.text("<script>window.KB_SESSION=${quote(sessionId)}</script>\n")
+    out.text("<script src=\"/kealeb/kealeb.js\"></script>\n")
+    out.text("</body>\n</html>\n")
+    return out.all()
+}
+
+// ---------------------------------------------------------------- the client
+
+/// The whole client, and there is not going to be a second one.
+///
+/// It opens a socket, reports the events a node said it listens for, and
+/// applies the six patches. It does not know what a component is, does not
+/// keep a copy of the tree, and does not decide anything — every decision is
+/// on the server, in Keal, where it can be read. Under three kilobytes, no
+/// dependencies, and it is served from memory.
+public val clientScript: String = """
+(function () {
+  var root = document.getElementById('kb-root');
+  if (!root) return;
+  var ws = null, tries = 0, badge = null, closed = false;
+
+  function nodeAt(path) {
+    if (path === '') return root;
+    var n = root, parts = path.split('.');
+    for (var i = 0; i < parts.length; i++) {
+      n = n.childNodes[parseInt(parts[i], 10)];
+      if (!n) return null;
+    }
+    return n;
+  }
+
+  function fragment(html) {
+    var t = document.createElement('template');
+    t.innerHTML = html;
+    return t.content.firstChild;
+  }
+
+  function setAttr(el, name, value) {
+    if (el.nodeType !== 1) return;
+    el.setAttribute(name, value);
+    // An input's attribute and its property are different things once the
+    // user has typed. The server is the truth, so write both.
+    if (name === 'value' && 'value' in el && el.value !== value) {
+      // The server is the truth about what a field holds, but it is not the
+      // truth about where the caret is. Put it back.
+      var caret = el.selectionStart;
+      el.value = value;
+      if (caret != null && el === document.activeElement && el.setSelectionRange) {
+        try { el.setSelectionRange(caret, caret); } catch (e) {}
+      }
+    }
+    if (name === 'checked') el.checked = true;
+  }
+
+  function apply(p) {
+    var op = p[0], node = nodeAt(p[1]);
+    if (!node) return;
+    if (op === 't') { node.nodeValue = p[2]; return; }
+    if (op === 'a') { setAttr(node, p[2], p[3]); return; }
+    if (op === 'd') {
+      if (node.nodeType === 1) {
+        node.removeAttribute(p[2]);
+        if (p[2] === 'checked') node.checked = false;
+      }
+      return;
+    }
+    if (op === 'r') {
+      var made = fragment(p[2]);
+      if (made && node.parentNode) node.parentNode.replaceChild(made, node);
+      return;
+    }
+    if (op === 'i') {
+      var child = fragment(p[3]);
+      if (child) node.insertBefore(child, node.childNodes[parseInt(p[2], 10)] || null);
+      return;
+    }
+    if (op === 'x') {
+      var gone = node.childNodes[parseInt(p[2], 10)];
+      if (gone) node.removeChild(gone);
+      return;
+    }
+  }
+
+  function valueOf(el) {
+    if (el.type === 'checkbox' || el.type === 'radio') return el.checked ? 'true' : 'false';
+    if ('value' in el) return String(el.value);
+    return el.textContent;
+  }
+
+  function listens(el, name) {
+    var on = el.getAttribute('data-kb-on');
+    return !!on && on.split(' ').indexOf(name) >= 0;
+  }
+
+  function report(name, event) {
+    var el = event.target && event.target.closest ? event.target.closest('[data-kb]') : null;
+    if (!el || !listens(el, name)) return;
+    var fields = {};
+    if (name === 'keydown') { fields.key = event.key; }
+    if (name === 'submit') {
+      event.preventDefault();
+      var data = new FormData(el);
+      data.forEach(function (v, k) { fields[k] = String(v); });
+    }
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ i: el.getAttribute('data-kb'), e: name, v: valueOf(el), f: fields }));
+  }
+
+  ['click', 'input', 'change', 'submit', 'keydown'].forEach(function (name) {
+    root.addEventListener(name, function (e) { report(name, e); }, true);
+  });
+
+  function offline(show) {
+    if (show && !badge) {
+      badge = document.createElement('div');
+      badge.className = 'kb-offline';
+      badge.textContent = 'reconnecting…';
+      document.body.appendChild(badge);
+    } else if (!show && badge) {
+      badge.remove();
+      badge = null;
+    }
+  }
+
+  function connect() {
+    var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    ws = new WebSocket(scheme + location.host + '/kealeb/live?s=' + encodeURIComponent(window.KB_SESSION));
+    ws.onopen = function () { tries = 0; offline(false); };
+    ws.onmessage = function (e) {
+      var msg = JSON.parse(e.data);
+      if (msg.gone) { location.reload(); return; }
+      if (msg.p) { for (var i = 0; i < msg.p.length; i++) apply(msg.p[i]); }
+    };
+    ws.onclose = function () {
+      if (closed) return;
+      offline(true);
+      tries++;
+      // A page whose session the server has forgotten is a page that should
+      // ask for a new one, and a reload is the only honest way to get it.
+      if (tries > 6) { location.reload(); return; }
+      setTimeout(connect, Math.min(250 * tries, 3000));
+    };
+    ws.onerror = function () { if (ws) ws.close(); };
+  }
+
+  window.addEventListener('beforeunload', function () { closed = true; if (ws) ws.close(); });
+  connect();
+})();
+"""

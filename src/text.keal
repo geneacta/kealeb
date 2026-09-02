@@ -1,0 +1,151 @@
+/// The string work a web server does before it does anything else: splitting
+/// a line at its first colon, decoding what a browser percent-encoded, and
+/// reading a form back out of `a=1&b=2`.
+///
+/// None of it is clever. It is here so that `http.keal` reads as the protocol
+/// and not as a pile of `indexOf` arithmetic.
+
+import "./bytes.keal"
+
+/// `s` cut at the first `sep`, or `null` when it does not occur. The
+/// separator belongs to neither side.
+public func cutOn(s: String, sep: String): (String, String)? {
+    val at = s.indexOf(sep)
+    if (at < 0) { return null }
+    return s.substring(0, at), s.substring(at + sep.length, s.length)
+}
+
+/// Everything before the first `sep`, or all of `s`.
+public func before(s: String, sep: String): String {
+    val at = s.indexOf(sep)
+    return at < 0 ? s : s.substring(0, at)
+}
+
+/// Everything after the first `sep`, or `""`.
+public func after(s: String, sep: String): String {
+    val at = s.indexOf(sep)
+    return at < 0 ? "" : s.substring(at + sep.length, s.length)
+}
+
+/// Header names are compared without regard to case, and this is the one
+/// place that is decided.
+public func headerKey(name: String): String { return name.trim().toLower() }
+
+// -------------------------------------------------------- percent-encoding
+
+func hexValue(c: String): Int {
+    val v = c.code()
+    if ((v >= 48) and (v <= 57)) { return v - 48 }
+    if ((v >= 97) and (v <= 102)) { return (v - 97) + 10 }
+    if ((v >= 65) and (v <= 70)) { return (v - 65) + 10 }
+    return -1
+}
+
+/// `%20` back to a space, `+` back to a space when `plus` says so — which is
+/// what a form body means by it and what a path does not.
+///
+/// Percent-decoding produces *bytes*, and the bytes are UTF-8 or they are
+/// not text; they go through a buffer so that a malformed sequence becomes
+/// U+FFFD at the same boundary every other byte from the network crosses.
+public func percentDecode(s: String, plus: Bool = false): String {
+    if ((not s.contains("%")) and ((not plus) or (not s.contains("+")))) { return s }
+    val out = buf(textBytes(s))
+    var i = 0
+    val n = s.length
+    while (i < n) {
+        val c = s[i]
+        if ((c == "%") and (i + 2 < n)) {
+            val hi = hexValue(s[i + 1])
+            val lo = hexValue(s[i + 2])
+            if ((hi >= 0) and (lo >= 0)) {
+                out.byte((hi * 16) + lo)
+                i = i + 3
+                continue
+            }
+        }
+        if (plus and (c == "+")) { out.byte(32) } else { out.text(c) }
+        i = i + 1
+    }
+    return out.all()
+}
+
+val unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+
+/// The inverse, for putting a value into a URL. Everything that is not
+/// unreserved is encoded, which is more than strictly required and never
+/// wrong.
+public func percentEncode(s: String): String {
+    val src = bufOf(s)
+    val out: List<String> = []
+    for (i in 0..src.len) {
+        val b = src.at(i)
+        val c = b.toChar()
+        if (unreserved.contains(c) and (b < 128)) { out.add(c) } else { out.add("%" + hexByte(b).toUpper()) }
+    }
+    return out.join("")
+}
+
+// ------------------------------------------------------------ form fields
+
+/// `a=1&b=hello+world` as a map. A repeated name keeps the first value; a
+/// name with no `=` maps to `""`, which is what an HTML checkbox sends.
+public func parseForm(s: String): Map<String, String> {
+    val out: Map<String, String> = {}
+    if (s.isEmpty()) { return out }
+    for (pair in s.split("&")) {
+        if (pair.isEmpty()) { continue }
+        val cut = cutOn(pair, "=")
+        var name = pair
+        var value = ""
+        if (cut != null) { name = cut.first; value = percentDecode(cut.second, true) }
+        name = percentDecode(name, true)
+        if (not out.containsKey(name)) { out.set(name, value) }
+    }
+    return out
+}
+
+/// Every value of a repeated field, in order — what `<select multiple>` and
+/// a list of checkboxes send.
+public func parseFormAll(s: String): Map<String, List<String>> {
+    val out: Map<String, List<String>> = {}
+    for (pair in s.split("&")) {
+        if (pair.isEmpty()) { continue }
+        val cut = cutOn(pair, "=")
+        var name = pair
+        var value = ""
+        if (cut != null) { name = cut.first; value = percentDecode(cut.second, true) }
+        name = percentDecode(name, true)
+        val had = out.get(name)
+        if (had == null) { out.set(name, [value]) } else { had.add(value) }
+    }
+    return out
+}
+
+/// A `Cookie:` header as a map. `name=value; other=thing`.
+public func parseCookies(header: String): Map<String, String> {
+    val out: Map<String, String> = {}
+    for (part in header.split(";")) {
+        val cut = cutOn(part.trim(), "=")
+        if (cut == null) { continue }
+        val name = cut.first.trim()
+        if (name.isEmpty()) { continue }
+        if (not out.containsKey(name)) { out.set(name, percentDecode(cut.second.trim())) }
+    }
+    return out
+}
+
+// ------------------------------------------------------------------ dates
+
+val httpDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+val httpMonths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+func pad2(n: Int): String { return n < 10 ? "0${n}" : "${n}" }
+
+/// `Sun, 06 Nov 1994 08:49:37 GMT` — the one date format HTTP has, for a
+/// `Date:` header and a cookie's `Expires`.
+public func httpDate(epochSeconds: Int): String {
+    val d = utcAt(epochSeconds)
+    return "${httpDays[d.weekday]}, ${pad2(d.day)} ${httpMonths[d.month - 1]} ${d.year} " +
+           "${pad2(d.hour)}:${pad2(d.minute)}:${pad2(d.second)} GMT"
+}

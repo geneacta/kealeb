@@ -1,0 +1,183 @@
+/// Routing: which handler answers which request.
+///
+/// A pattern is a path with named holes — `/user/{id}` — and the hole's name
+/// is how the handler asks for what it caught: `req.param("id")`. A final
+/// `{rest...}` catches everything that is left, slashes included, which is
+/// what serving a directory needs and nothing else does.
+///
+/// When two patterns both match, the one with more literal segments wins:
+/// `/user/new` beats `/user/{id}` no matter which was declared first. That is
+/// the only precedence rule, it does not depend on registration order, and it
+/// is the one every reader guesses.
+
+import "./http.keal"
+import "./text.keal"
+
+/// One registered route.
+public class Route(
+    /// The method, upper case. `*` answers every method.
+    public val method: String,
+    /// The pattern as written, for messages.
+    public val pattern: String,
+    package val segments: List<String>,
+    package val tail: String,
+    package val literals: Int,
+    package val handler: (Request) -> Response
+)
+
+/// What a lookup found. `route` is null when nothing matched; `wrongMethod`
+/// separates *no such path* from *that path, but not that verb*, because the
+/// answers are 404 and 405 and a framework that cannot tell them apart makes
+/// every client guess.
+public class Match(
+    public val route: Route?,
+    public val params: Map<String, String>,
+    public val wrongMethod: Bool,
+    public val allowed: List<String>
+)
+
+/// Split a path into segments, dropping the empty ones an extra or trailing
+/// slash produces. `/`, `//` and `` all answer the empty list, so a route for
+/// `/` matches all three.
+public func segmentsOf(path: String): List<String> {
+    val out: List<String> = []
+    for (part in path.split("/")) {
+        if (not part.isEmpty()) { out.add(part) }
+    }
+    return out
+}
+
+/// The routing table.
+public class Router() {
+    package var routes: List<Route> = []
+
+    /// Register a handler. `method` may be `*`.
+    public proc route(method: String, pattern: String, handler: (Request) -> Response) {
+        val segs = segmentsOf(pattern)
+        var tail = ""
+        var literals = 0
+        val kept: List<String> = []
+        for (s in segs) {
+            if (s.startsWith("{") and s.endsWith("...}")) {
+                tail = s.substring(1, s.length - 4)
+                continue
+            }
+            if (s.startsWith("{") and s.endsWith("}")) {
+                kept.add(s)
+            } else {
+                kept.add(s)
+                literals = literals + 1
+            }
+        }
+        this.routes.add(Route(method.toUpper(), pattern, kept, tail, literals, handler))
+    }
+
+    /// `GET`, and with it `HEAD`: a server that answers one and not the other
+    /// is a server that breaks caches, and the difference — send no body — is
+    /// the framing layer's to make, not the handler's.
+    public proc get(pattern: String, handler: (Request) -> Response) {
+        this.route("GET", pattern, handler)
+    }
+
+    public proc post(pattern: String, handler: (Request) -> Response) {
+        this.route("POST", pattern, handler)
+    }
+
+    public proc put(pattern: String, handler: (Request) -> Response) {
+        this.route("PUT", pattern, handler)
+    }
+
+    public proc patch(pattern: String, handler: (Request) -> Response) {
+        this.route("PATCH", pattern, handler)
+    }
+
+    public proc delete(pattern: String, handler: (Request) -> Response) {
+        this.route("DELETE", pattern, handler)
+    }
+
+    /// Every method at once — for a health check, or a catch-all.
+    public proc any(pattern: String, handler: (Request) -> Response) {
+        this.route("*", pattern, handler)
+    }
+
+    /// How many routes are registered.
+    public func size(): Int { return this.routes.size }
+
+    /// Find the handler for a method and a path.
+    public func find(method: String, path: String): Match {
+        val want = method.toUpper()
+        val segs = segmentsOf(path)
+        var best: Route? = null
+        var bestLiterals = -1
+        var bestParams: Map<String, String> = {}
+        val allowed: List<String> = []
+        var pathMatched = false
+
+        for (r in this.routes) {
+            val params: Map<String, String> = {}
+            if (not matches(r, segs, params)) { continue }
+            pathMatched = true
+            val methodOk = (r.method == "*") or (r.method == want) or
+                           ((want == "HEAD") and (r.method == "GET"))
+            if (not methodOk) {
+                if (not allowed.contains(r.method)) { allowed.add(r.method) }
+                continue
+            }
+            if (r.literals > bestLiterals) {
+                best = r
+                bestLiterals = r.literals
+                bestParams = params
+            }
+        }
+
+        if (best != null) { return Match(best, bestParams, false, allowed) }
+        val none: Map<String, String> = {}
+        return Match(null, none, pathMatched and (not allowed.isEmpty()), allowed)
+    }
+}
+
+/// Does this route's pattern match these segments? Fills `params` as it goes,
+/// which is why it is a `func` with an out parameter rather than something
+/// tidier: a match that has to be replayed to learn what it caught is a match
+/// computed twice.
+func matches(r: Route, segs: List<String>, var params: Map<String, String>): Bool {
+    val n = r.segments.size
+    if (r.tail.isEmpty()) {
+        if (segs.size != n) { return false }
+    } else {
+        if (segs.size < n) { return false }
+    }
+    var i = 0
+    while (i < n) {
+        val pat = r.segments[i]
+        val got = segs[i]
+        if (pat.startsWith("{") and pat.endsWith("}")) {
+            params.set(pat.substring(1, pat.length - 1), got)
+        } else if (pat != got) {
+            return false
+        }
+        i = i + 1
+    }
+    if (not r.tail.isEmpty()) {
+        val rest: List<String> = []
+        var k = n
+        while (k < segs.size) { rest.add(segs[k]); k = k + 1 }
+        params.set(r.tail, rest.join("/"))
+    }
+    return true
+}
+
+/// Run a request through a table. This is the whole of dispatch: what does
+/// not match is a 404, what matches a path but not a method is a 405 that
+/// says which methods it would have taken.
+public func dispatch(router: Router, req: Request): Response {
+    val m = router.find(req.method, req.path)
+    val r = m.route
+    if (r == null) {
+        if (m.wrongMethod) {
+            return notFound("Method not allowed").status(405).with("allow", m.allowed.join(", "))
+        }
+        return notFound("No route for ${req.method} ${req.path}")
+    }
+    return r.handler(withParams(req, m.params))
+}

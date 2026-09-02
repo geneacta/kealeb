@@ -1,0 +1,14 @@
+/// kealeb, in one import.
+///
+///     import "kealeb/kealeb.keal"
+///
+///     val a = app("Hello")
+///     a.page("/", { req -> column([h1("Hello"), p("from Keal")]) })
+///     a.run(8080)
+///
+/// Everything the framework offers is visible after this line: the
+/// application, the router, requests and responses, the component tree and
+/// its widgets, the stylesheet, the byte buffers and the socket layer.
+/// Importing a single module instead — `src/http.keal`, say — works too and
+/// brings only what that file reaches.
+import "./src/app.keal"

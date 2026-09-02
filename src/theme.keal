@@ -1,0 +1,130 @@
+/// The stylesheet, and the document around a page.
+///
+/// A framework that renders HTML and leaves it unstyled has not finished the
+/// job: the first thing anybody does with it is spend an afternoon on a
+/// stylesheet, and the second is discover that it does not follow the
+/// operating system's dark mode. So one is included, it is small enough to
+/// read, and every rule in it is prefixed `kb-` so that a program that wants
+/// its own can ignore this one entirely — `doc(..., style = "")` and nothing
+/// of kealeb's is on the page.
+///
+/// It is deliberately not a design system. There are no components here that
+/// the widgets in `ui.keal` do not use.
+
+import "./bytes.keal"
+import "./ui.keal"
+
+/// The stylesheet kealeb serves at `/kealeb/kealeb.css`.
+public val stylesheet: String = """
+:root {
+  color-scheme: light dark;
+  --kb-bg: #ffffff;
+  --kb-fg: #1b1d1f;
+  --kb-muted: #61686f;
+  --kb-line: #e3e6e9;
+  --kb-surface: #f7f8f9;
+  --kb-accent: #2f6feb;
+  --kb-accent-fg: #ffffff;
+  --kb-danger: #c8372d;
+  --kb-radius: 10px;
+  --kb-gap: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --kb-bg: #16181a;
+    --kb-fg: #e8eaec;
+    --kb-muted: #9aa2aa;
+    --kb-line: #2c3034;
+    --kb-surface: #1e2124;
+    --kb-accent: #6c9bff;
+    --kb-accent-fg: #10131a;
+    --kb-danger: #ff6b5e;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 32px 20px;
+  background: var(--kb-bg);
+  color: var(--kb-fg);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.kb-page { max-width: 760px; margin: 0 auto; }
+h1, h2, h3 { line-height: 1.25; margin: 0 0 .4em; font-weight: 620; }
+h1 { font-size: 1.7rem; letter-spacing: -0.015em; }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0 0 .8em; }
+a { color: var(--kb-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+pre {
+  background: var(--kb-surface); border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius); padding: 12px 14px; overflow-x: auto;
+}
+hr { border: 0; border-top: 1px solid var(--kb-line); margin: 20px 0; }
+
+.kb-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kb-gap); }
+.kb-col { display: flex; flex-direction: column; gap: var(--kb-gap); }
+.kb-card {
+  background: var(--kb-surface); border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius); padding: 16px 18px;
+}
+.kb-muted { color: var(--kb-muted); }
+
+.kb-btn {
+  font: inherit; line-height: 1.2; padding: 8px 14px; cursor: pointer;
+  border: 1px solid var(--kb-line); border-radius: var(--kb-radius);
+  background: var(--kb-bg); color: var(--kb-fg);
+}
+.kb-btn:hover { border-color: var(--kb-accent); }
+.kb-btn:active { transform: translateY(1px); }
+.kb-btn[disabled] { opacity: .5; cursor: default; }
+.kb-primary { background: var(--kb-accent); color: var(--kb-accent-fg); border-color: transparent; }
+.kb-danger { background: var(--kb-danger); color: #fff; border-color: transparent; }
+
+.kb-input, .kb-select {
+  font: inherit; padding: 8px 10px; color: var(--kb-fg);
+  background: var(--kb-bg); border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius); min-width: 0;
+}
+.kb-input:focus, .kb-select:focus { outline: 2px solid var(--kb-accent); outline-offset: -1px; }
+textarea.kb-input { min-height: 6em; resize: vertical; }
+.kb-check { width: 16px; height: 16px; accent-color: var(--kb-accent); }
+label { display: inline-flex; align-items: center; gap: 8px; }
+
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--kb-line); }
+th { font-weight: 600; color: var(--kb-muted); font-size: .85em; letter-spacing: .03em; text-transform: uppercase; }
+
+ul, ol { margin: 0 0 .8em; padding-left: 1.3em; }
+li { margin: .15em 0; }
+
+.kb-offline {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: var(--kb-danger); color: #fff; padding: 8px 14px;
+  border-radius: 999px; font-size: .9em; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+"""
+
+/// Wrap a tree in a whole HTML document.
+///
+/// `head` is markup dropped into `<head>` — a favicon, a font, your own
+/// stylesheet. `style` is the stylesheet link; passing `""` leaves the page
+/// unstyled, which is the supported way to bring your own.
+public func doc(title: String, body: Node, head: String = "",
+                style: String = "/kealeb/kealeb.css"): String {
+    val out = buf(2048)
+    out.text("<!doctype html>\n<html lang=\"en\">\n<head>\n")
+    out.text("<meta charset=\"utf-8\">\n")
+    out.text("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    out.text("<title>${escape(title)}</title>\n")
+    if (not style.isEmpty()) {
+        out.text("<link rel=\"stylesheet\" href=\"${escapeAttr(style)}\">\n")
+    }
+    if (not head.isEmpty()) { out.text(head + "\n") }
+    out.text("</head>\n<body>\n")
+    renderInto(el("div").cls("kb-page").add(body), out)
+    out.text("\n</body>\n</html>\n")
+    return out.all()
+}

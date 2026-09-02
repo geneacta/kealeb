@@ -1,0 +1,43 @@
+import "../kealeb.keal"
+
+/// The smallest kealeb program that is worth reading.
+///
+///     tools/build.sh examples/hello.keal && build/hello
+///
+/// Three routes: a page built out of components, a plain-text handler that
+/// reads what the path captured, and a form that posts to itself.
+
+val site = app("kealeb — hello")
+
+site.page("/", { req -> column([
+    h1("kealeb"),
+    p("A web framework written in Keal. This page is a tree of components, rendered on the server."),
+    card([
+        h3("Try"),
+        ul([
+            li([link("/hi/world", "/hi/world"), txt(" — a path parameter")]),
+            li([link("/greet", "/greet"), txt(" — a form, posting to itself")])
+        ])
+    ]),
+    p("Served from ${req.peer}.").cls("kb-muted")
+])})
+
+site.get("/hi/{name}", { req -> text("hello ${req.param("name")}") })
+
+site.page("/greet", { req -> column([
+    h1("Greet"),
+    el("form").attr("method", "post").add(row([
+        el("input").cls("kb-input").attr("name", "name").attr("placeholder", "your name"),
+        submit("Say hello")
+    ]))
+])}, "kealeb — greet")
+
+site.post("/greet", { req ->
+    val name = req.form().get("name") ?: ""
+    html(doc("kealeb — greet", column([
+        h1("Hello, ${name.isEmpty() ? "stranger" : name}"),
+        link("/greet", "again")
+    ])))
+})
+
+site.run(8080)

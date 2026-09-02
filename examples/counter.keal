@@ -1,0 +1,37 @@
+import "../kealeb.keal"
+
+/// A live page: the state is on the server, and only the difference travels.
+///
+///     tools/build.sh examples/counter.keal && build/counter
+///
+/// `livePage` calls the outer function once per visitor. Whatever it closes
+/// over is that visitor's own state — there is no session map to key
+/// correctly, because the closure *is* the session. What it answers is called
+/// again after every event, and what reaches the browser is the list of
+/// changes between the tree it built last time and the tree it built now.
+
+val site = app("kealeb — counter")
+
+site.livePage("/", { req ->
+    var count = 0
+    var step = 1
+    view({ -> column([
+        h1("Clicked ${count} times"),
+        p("Nothing on this page is JavaScript you wrote. The tree lives on the server.").cls("kb-muted"),
+        card([
+            row([
+                button("−${step}", { e -> count = count - step }),
+                button("+${step}", { e -> count = count + step }).cls("kb-primary"),
+                button("reset", { e -> count = 0 })
+            ]),
+            row([
+                label("step"),
+                select("${step}", [("1", "1"), ("5", "5"), ("10", "10")],
+                       { e -> step = e.number(1) })
+            ])
+        ]),
+        shownWhen(count > 9, p("Nine is enough, surely.").cls("kb-muted"))
+    ]) })
+})
+
+site.run(8080)

@@ -1,0 +1,89 @@
+import "../kealeb.keal"
+
+/// A list you can add to, tick off and filter — the example that shows what a
+/// live page is actually for.
+///
+///     tools/build.sh examples/todo.keal && build/todo
+///
+/// Everything here is Keal. There is no template, no client state and no
+/// JavaScript: the page is a function from three variables to a tree, and the
+/// framework works out what changed. Typing in the field sends one event per
+/// keystroke and gets back one patch — the field's own value, because the
+/// server is what decides what a field holds. Nothing else on the page moves
+/// until the task is added.
+///
+/// Two shapes here are the language's, not the framework's, and both are
+/// worth knowing before writing your own page. The helpers are top-level
+/// `proc`s rather than functions nested inside the factory, because
+/// `keal build` does not compile nested functions yet — it says so by name
+/// rather than getting them wrong. And they take the list and an index rather
+/// than the task itself, because the contents of a parameter belong to the
+/// caller unless the signature says `var`, and a lambda's parameter cannot.
+
+class Task(public var what: String, public var done: Bool)
+
+/// Tick one off, or un-tick it.
+proc setDone(var tasks: List<Task>, at: Int, on: Bool) {
+    if ((at < 0) or (at >= tasks.size)) { return }
+    tasks[at].done = on
+}
+
+/// Take one out.
+proc forget(var tasks: List<Task>, at: Int) {
+    if ((at < 0) or (at >= tasks.size)) { return }
+    tasks.removeAt(at)
+}
+
+val site = app("kealeb — tasks")
+
+site.livePage("/", { req ->
+    val tasks: List<Task> = [Task("Read the guide", true), Task("Write a page", false)]
+    var draft = ""
+    var showing = "all"
+
+    val add = { e: Ev ->
+        val what = draft.trim()
+        if (not what.isEmpty()) {
+            tasks.add(Task(what, false))
+            draft = ""
+        }
+    }
+
+    view({ ->
+        val rows: List<Node> = []
+        var i = 0
+        for (t in tasks) {
+            val at = i
+            i = i + 1
+            val wanted = (showing == "all") or ((showing == "done") == t.done)
+            if (not wanted) { continue }
+            val what = span(t.what)
+            if (t.done) { what.style("text-decoration: line-through; opacity: .55") }
+            rows.add(row([
+                checkbox(t.done, { e -> setDone(tasks, at, e.checked()) }),
+                what,
+                button("remove", { e -> forget(tasks, at) }).cls("kb-danger")
+            ]))
+        }
+        val left = tasks.count({ t -> not t.done })
+        column([
+            h1("Tasks"),
+            p("${left} left of ${tasks.size}.").cls("kb-muted"),
+            card([
+                row([
+                    field(draft, { e -> draft = e.value }).style("flex: 1"),
+                    button("Add", add).cls("kb-primary")
+                ]),
+                row([
+                    label("show"),
+                    select(showing, [("all", "everything"), ("todo", "not done"), ("done", "done")],
+                           { e -> showing = e.value })
+                ])
+            ]),
+            column(rows),
+            shownWhen(rows.isEmpty(), p("Nothing here.").cls("kb-muted"))
+        ])
+    })
+})
+
+site.run(8080)

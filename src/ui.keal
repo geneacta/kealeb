@@ -1,0 +1,304 @@
+/// The component tree.
+///
+/// A page is a function from what the program knows to a tree of `Node`s, and
+/// a `Node` is one element, one piece of text, or one block of raw markup.
+/// Nothing here knows whether the tree will be rendered once and sent, or
+/// rendered again and compared with the last one so that only the difference
+/// crosses the wire — that difference is `live.keal`'s, and it is the only
+/// difference between a page and a live page.
+///
+/// There is one class rather than a hierarchy, and the reason is the
+/// language: a trait is not a type in Keal, so a list of different kinds of
+/// component cannot be written. A tag on one class can, it costs one string
+/// per node, and it keeps the tree something a `when` can walk.
+
+import "./bytes.keal"
+
+/// What a handler is told. `value` is the field's text for an input, the
+/// checkbox's `"true"`/`"false"`, the selected option for a `select`, and
+/// `""` for a click.
+public class Ev(
+    /// `click`, `input`, `change`, `submit`, `keydown`.
+    public val name: String,
+    /// What the element held when the event happened.
+    public val value: String,
+    /// The other fields the client sent — a form's whole contents on
+    /// `submit`, the key on `keydown`.
+    public val fields: Map<String, String>
+) {
+    /// One of the extra fields, or `""`.
+    public func field(name: String): String { return this.fields.get(name) ?: "" }
+
+    /// The value read as a number, or `fallback` when it is not one.
+    public func number(fallback: Int = 0): Int { return this.value.trim().toInt() ?: fallback }
+
+    /// A checkbox's state.
+    public func checked(): Bool { return this.value == "true" }
+}
+
+/// The tag of a node that is text rather than an element.
+public val textTag: String = "#text"
+/// The tag of a node that is markup already, and is not to be escaped.
+public val rawTag: String = "#raw"
+
+/// One node of the tree.
+public class Node(
+    /// An HTML tag name, or `#text` / `#raw`.
+    public val tag: String,
+    /// The text, for `#text` and `#raw`. Empty for an element.
+    public var value: String,
+    package var attrs: Map<String, String>,
+    package var handlers: Map<String, (Ev) -> Unit>,
+    package var kids: List<Node>,
+    /// The identity a keyed list gives a child, so that inserting at the
+    /// front moves one node instead of rewriting every one.
+    package var key: String
+) {
+    /// Add a child.
+    public func add(child: Node): Node {
+        this.kids.add(child)
+        return this
+    }
+
+    /// Add several.
+    public func addAll(children: List<Node>): Node {
+        for (c in children) { this.kids.add(c) }
+        return this
+    }
+
+    /// Set an attribute. An empty value still renders the attribute, which is
+    /// what `disabled` and `required` mean.
+    public func attr(name: String, value: String): Node {
+        this.attrs.set(name, value)
+        return this
+    }
+
+    /// Set an attribute only when `yes` — for the boolean attributes, where
+    /// the absence is the false and `disabled="false"` is still disabled.
+    public func flag(name: String, yes: Bool): Node {
+        if (yes) { this.attrs.set(name, name) } else { this.attrs.remove(name) }
+        return this
+    }
+
+    /// Add to the class list. Several names at once are fine.
+    public func cls(names: String): Node {
+        val had = this.attrs.get("class")
+        this.attrs.set("class", had == null ? names : "${had} ${names}")
+        return this
+    }
+
+    public func id(value: String): Node { return this.attr("id", value) }
+    public func style(value: String): Node { return this.attr("style", value) }
+    public func title(value: String): Node { return this.attr("title", value) }
+
+    /// Listen for an event. The handler runs on the server, in the session
+    /// this page belongs to, with nothing else running.
+    public func on(event: String, handler: (Ev) -> Unit): Node {
+        this.handlers.set(event, handler)
+        return this
+    }
+
+    /// The identity this node keeps across renders.
+    public func keyed(k: String): Node {
+        this.key = k
+        return this
+    }
+
+    /// What an attribute is set to, or `""`.
+    public func attrOf(name: String): String { return this.attrs.get(name) ?: "" }
+
+    /// How many children.
+    public func size(): Int { return this.kids.size }
+}
+
+/// An element, empty.
+public func el(tag: String): Node {
+    val attrs: Map<String, String> = {}
+    val handlers: Map<String, (Ev) -> Unit> = {}
+    val kids: List<Node> = []
+    return Node(tag, "", attrs, handlers, kids, "")
+}
+
+/// An element with children.
+public func elt(tag: String, kids: List<Node>): Node { return el(tag).addAll(kids) }
+
+/// Text. It is escaped when it is rendered, always, and there is no way to
+/// ask for it not to be — that is what `raw` is for, and it is spelt
+/// differently on purpose.
+public func txt(s: String): Node {
+    val attrs: Map<String, String> = {}
+    val handlers: Map<String, (Ev) -> Unit> = {}
+    val kids: List<Node> = []
+    return Node(textTag, s, attrs, handlers, kids, "")
+}
+
+/// Nothing — a node that is there so that its neighbours keep their places.
+///
+/// A live page addresses a node by counting, so a component that renders to
+/// no bytes would shift every node after it by one. This renders as an empty
+/// comment: one node in the browser, nothing on the screen.
+public func nothing(): Node { return txt("") }
+
+/// Markup that is already markup. Whatever is in it reaches the browser
+/// unchanged, so it must not be anything a stranger typed.
+///
+/// **It must be exactly one element.** Two would be two nodes where the tree
+/// has one, and a live page counts nodes.
+public func raw(s: String): Node {
+    val attrs: Map<String, String> = {}
+    val handlers: Map<String, (Ev) -> Unit> = {}
+    val kids: List<Node> = []
+    return Node(rawTag, s, attrs, handlers, kids, "")
+}
+
+// ------------------------------------------------------------- the elements
+
+public func div(kids: List<Node>): Node { return elt("div", kids) }
+public func span(s: String): Node { return el("span").add(txt(s)) }
+public func p(s: String): Node { return el("p").add(txt(s)) }
+public func h1(s: String): Node { return el("h1").add(txt(s)) }
+public func h2(s: String): Node { return el("h2").add(txt(s)) }
+public func h3(s: String): Node { return el("h3").add(txt(s)) }
+public func strong(s: String): Node { return el("strong").add(txt(s)) }
+public func em(s: String): Node { return el("em").add(txt(s)) }
+public func code(s: String): Node { return el("code").add(txt(s)) }
+public func pre(s: String): Node { return el("pre").add(txt(s)) }
+public func br(): Node { return el("br") }
+public func hr(): Node { return el("hr") }
+
+/// A link. It is not called `a`: a one-letter name at the top level of every
+/// kealeb program collides with the first variable anybody writes.
+public func link(href: String, s: String): Node { return el("a").attr("href", href).add(txt(s)) }
+public func img(src: String, alt: String): Node { return el("img").attr("src", src).attr("alt", alt) }
+
+public func ul(kids: List<Node>): Node { return elt("ul", kids) }
+public func ol(kids: List<Node>): Node { return elt("ol", kids) }
+public func li(kids: List<Node>): Node { return elt("li", kids) }
+
+public func section(kids: List<Node>): Node { return elt("section", kids) }
+public func header(kids: List<Node>): Node { return elt("header", kids) }
+public func footer(kids: List<Node>): Node { return elt("footer", kids) }
+public func nav(kids: List<Node>): Node { return elt("nav", kids) }
+public func main(kids: List<Node>): Node { return elt("main", kids) }
+
+public func table(kids: List<Node>): Node { return elt("table", kids) }
+public func thead(kids: List<Node>): Node { return elt("thead", kids) }
+public func tbody(kids: List<Node>): Node { return elt("tbody", kids) }
+public func tr(kids: List<Node>): Node { return elt("tr", kids) }
+public func th(s: String): Node { return el("th").add(txt(s)) }
+public func td(kids: List<Node>): Node { return elt("td", kids) }
+public func tdt(s: String): Node { return el("td").add(txt(s)) }
+
+public func form(kids: List<Node>): Node { return elt("form", kids) }
+public func label(s: String): Node { return el("label").add(txt(s)) }
+public func option(value: String, s: String): Node {
+    return el("option").attr("value", value).add(txt(s))
+}
+
+// ------------------------------------------------------------- the widgets
+
+/// A row: children side by side, evenly spaced.
+public func row(kids: List<Node>): Node { return elt("div", kids).cls("kb-row") }
+
+/// A column: children stacked.
+public func column(kids: List<Node>): Node { return elt("div", kids).cls("kb-col") }
+
+/// A card: a panel with a border, some padding and a shadow.
+public func card(kids: List<Node>): Node { return elt("div", kids).cls("kb-card") }
+
+/// A button that runs a handler on the server.
+public func button(text: String, onClick: (Ev) -> Unit): Node {
+    return el("button").cls("kb-btn").attr("type", "button").add(txt(text)).on("click", onClick)
+}
+
+/// A button that submits a form the ordinary way — for a page that works
+/// without any JavaScript at all.
+public func submit(text: String): Node {
+    return el("button").cls("kb-btn kb-primary").attr("type", "submit").add(txt(text))
+}
+
+/// A text field. `onInput` runs on every keystroke.
+public func field(value: String, onInput: (Ev) -> Unit): Node {
+    return el("input").cls("kb-input").attr("type", "text").attr("value", value).on("input", onInput)
+}
+
+/// A text field that only reports when it loses focus or Enter is pressed —
+/// what a form wants when every keystroke is not interesting.
+public func fieldOnChange(value: String, onChange: (Ev) -> Unit): Node {
+    return el("input").cls("kb-input").attr("type", "text").attr("value", value).on("change", onChange)
+}
+
+/// A checkbox.
+public func checkbox(on: Bool, onChange: (Ev) -> Unit): Node {
+    return el("input").cls("kb-check").attr("type", "checkbox").flag("checked", on).on("change", onChange)
+}
+
+/// A drop-down. `options` is a list of `(value, label)`.
+public func select(chosen: String, options: List<(String, String)>, onChange: (Ev) -> Unit): Node {
+    val node = el("select").cls("kb-select").on("change", onChange)
+    for (o in options) {
+        node.add(option(o.first, o.second).flag("selected", o.first == chosen))
+    }
+    return node
+}
+
+/// A multi-line field.
+public func textarea(value: String, onInput: (Ev) -> Unit): Node {
+    return el("textarea").cls("kb-input").add(txt(value)).on("input", onInput)
+}
+
+/// Text that is only there when a condition holds — the shape an empty state
+/// takes, without an `if` in the middle of a list literal.
+public func shownWhen(yes: Bool, node: Node): Node { return yes ? node : nothing() }
+
+// ------------------------------------------------------------- to the wire
+
+val voidTags = ["area", "base", "br", "col", "embed", "hr", "img", "input",
+                "link", "meta", "source", "track", "wbr"]
+
+/// Text, safe to put between tags.
+public func escape(s: String): String {
+    if (not (((s.contains("&") or s.contains("<")) or s.contains(">")))) { return s }
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+/// Text, safe to put inside a double-quoted attribute.
+public func escapeAttr(s: String): String {
+    return escape(s).replace("\"", "&quot;").replace("'", "&#39;")
+}
+
+/// Render a tree into a buffer.
+///
+/// Nothing here knows about events: a node that listens carries `data-kb` as
+/// an ordinary attribute, put there by `live.keal` before the tree is
+/// rendered. That is what lets the diff treat it like any other attribute
+/// instead of needing a rule of its own — and it is why a static page, which
+/// never goes through that pass, carries no wiring at all.
+public proc renderInto(node: Node, out: Buf) {
+    if (node.tag == textTag) {
+        // The invariant the whole live layer rests on: one `Node`, one node in
+        // the browser. Empty text is no node at all in HTML, so it goes out as
+        // an empty comment — which is one node, and is not visible.
+        out.text(node.value.isEmpty() ? "<!---->" : escape(node.value))
+        return
+    }
+    if (node.tag == rawTag) {
+        out.text(node.value.isEmpty() ? "<!---->" : node.value)
+        return
+    }
+    out.text("<${node.tag}")
+    for (name in node.attrs.keys()) {
+        out.text(" ${name}=\"${escapeAttr(node.attrs.get(name) ?: "")}\"")
+    }
+    out.text(">")
+    if (voidTags.contains(node.tag)) { return }
+    for (k in node.kids) { renderInto(k, out) }
+    out.text("</${node.tag}>")
+}
+
+/// A tree as HTML, with no event wiring — what a static page sends.
+public func render(node: Node): String {
+    val out = buf(1024)
+    renderInto(node, out)
+    return out.all()
+}

@@ -1,0 +1,280 @@
+/// Bytes: a growable buffer, and the three encodings a web server cannot
+/// avoid — hexadecimal, Base64 and SHA-1.
+///
+/// A `Buf` owns one blob and gives it back in `deinit`, so a connection that
+/// dies frees its buffers at the statement its last reference goes, with
+/// nothing to remember and no collector to wait for. That is the whole reason
+/// the buffers are Keal objects rather than raw handles passed around.
+
+import "./ffi.keal"
+
+// ------------------------------------------------------------------- Buf
+
+/// A growable byte buffer. `len` bytes are live; the blob is usually bigger.
+public class Buf(package var h: Int, package var len: Int) {
+    /// The blob goes back when the last reference to this buffer does.
+    proc deinit() {
+        blobFree(this.h)
+        this.h = 0
+        this.len = 0
+    }
+
+    /// How many bytes it can hold before it has to grow.
+    public func cap(): Int { return blobSize(this.h) }
+
+    /// The handle, for the calls that take one. It stays valid until the next
+    /// growth, which is why nothing outside this file keeps it.
+    package func handle(): Int { return this.h }
+
+    /// Make room for `n` more bytes.
+    public proc reserve(n: Int) {
+        val want = this.len + n
+        if (want <= this.cap()) { return }
+        var next = this.cap() * 2
+        if (next < 64) { next = 64 }
+        while (next < want) { next = next * 2 }
+        val grown = blobGrow(this.h, next)
+        if (grown == 0) { panic("out of memory growing a buffer to ${next} bytes") }
+        blobFree(this.h)
+        this.h = grown
+    }
+
+    /// Append one byte.
+    public proc byte(v: Int) {
+        this.reserve(1)
+        blobSet(this.h, this.len, v band 0xFF)
+        this.len = this.len + 1
+    }
+
+    /// Append the UTF-8 bytes of a string.
+    public proc text(s: String) {
+        val n = textBytes(s)
+        if (n == 0) { return }
+        this.reserve(n)
+        blobWrite(this.h, this.len, s)
+        this.len = this.len + n
+    }
+
+    /// Append `n` bytes of a raw blob.
+    public proc raw(src: Int, off: Int, n: Int) {
+        if (n <= 0) { return }
+        this.reserve(n)
+        blobCopy(this.h, this.len, src, off, n)
+        this.len = this.len + n
+    }
+
+    /// Append part of another buffer.
+    public proc join(other: Buf, off: Int, n: Int) {
+        this.raw(other.h, off, n)
+    }
+
+    /// The byte at `i`, or -1.
+    public func at(i: Int): Int {
+        if ((i < 0) or (i >= this.len)) { return -1 }
+        return blobGet(this.h, i)
+    }
+
+    /// `n` bytes from `off`, as text. Anything that is not well-formed UTF-8
+    /// arrives as U+FFFD.
+    public func textAt(off: Int, n: Int): String { return blobText(this.h, off, n) }
+
+    /// Everything in it, as text.
+    public func all(): String { return blobText(this.h, 0, this.len) }
+
+    /// Forget the first `n` bytes, moving what is left to the front. This is
+    /// what a connection does after it has consumed a request: the pipeline
+    /// behind it, if any, is already in the buffer.
+    public proc drop(n: Int) {
+        if (n <= 0) { return }
+        if (n >= this.len) { this.len = 0; return }
+        blobCopy(this.h, 0, this.h, n, this.len - n)
+        this.len = this.len - n
+    }
+
+    /// Forget everything, keeping the room.
+    public proc clear() { this.len = 0 }
+
+    /// Where `pat` starts at or after `from`, or -1. `pat` is matched byte by
+    /// byte, so it must be text whose bytes are what is being looked for —
+    /// which for `\r\n\r\n` and every other protocol delimiter it is.
+    public func find(pat: String, from: Int): Int {
+        val n = textBytes(pat)
+        if (n == 0) { return from }
+        val probe = buf(n)
+        probe.text(pat)
+        var i = from
+        if (i < 0) { i = 0 }
+        while (i + n <= this.len) {
+            var k = 0
+            while ((k < n) and (blobGet(this.h, i + k) == blobGet(probe.h, k))) { k = k + 1 }
+            if (k == n) { return i }
+            i = i + 1
+        }
+        return -1
+    }
+}
+
+/// An empty buffer with room for `cap` bytes.
+public func buf(cap: Int = 256): Buf {
+    var c = cap
+    if (c < 16) { c = 16 }
+    val h = blobNew(c)
+    if (h == 0) { panic("out of memory allocating a ${c}-byte buffer") }
+    return Buf(h, 0)
+}
+
+/// A buffer holding the UTF-8 bytes of `s`.
+public func bufOf(s: String): Buf {
+    val b = buf(textBytes(s) + 16)
+    b.text(s)
+    return b
+}
+
+// -------------------------------------------------------------------- hex
+
+val hexDigits = "0123456789abcdef"
+
+/// `255` as `"ff"` — two digits, always.
+public func hexByte(v: Int): String {
+    val n = v band 0xFF
+    return hexDigits[n shr 4] + hexDigits[n band 0x0F]
+}
+
+/// A whole buffer as hexadecimal.
+public func hex(b: Buf): String {
+    val parts: List<String> = []
+    for (i in 0..b.len) { parts.add(hexByte(b.at(i))) }
+    return parts.join("")
+}
+
+/// An `Int` as sixteen hexadecimal digits, high nibble first. Session
+/// identifiers are made of these.
+public func hex64(v: Int): String {
+    val parts: List<String> = []
+    for (i in 0..8) { parts.add(hexByte((v ushr ((7 - i) * 8)) band 0xFF)) }
+    return parts.join("")
+}
+
+// ----------------------------------------------------------------- Base64
+
+val b64Digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/// The bytes of a buffer, Base64 encoded, padded. This is what the WebSocket
+/// handshake sends back, and what a data URI is made of.
+public func base64(b: Buf): String {
+    val out: List<String> = []
+    var i = 0
+    while (i < b.len) {
+        val b0 = b.at(i)
+        val b1 = i + 1 < b.len ? b.at(i + 1) : 0
+        val b2 = i + 2 < b.len ? b.at(i + 2) : 0
+        val n = ((b0 shl 16) bor (b1 shl 8)) bor b2
+        out.add(b64Digits[(n shr 18) band 63])
+        out.add(b64Digits[(n shr 12) band 63])
+        out.add(i + 1 < b.len ? b64Digits[(n shr 6) band 63] : "=")
+        out.add(i + 2 < b.len ? b64Digits[n band 63] : "=")
+        i = i + 3
+    }
+    return out.join("")
+}
+
+/// Base64 back to bytes, or `null` when the text is not Base64. Whitespace is
+/// skipped; anything else is a refusal rather than a guess.
+public func unbase64(s: String): Buf? {
+    val out = buf(s.length)
+    var acc = 0
+    var bits = 0
+    for (c in s) {
+        if ((c == "\n") or ((c == "\r") or ((c == " ") or (c == "\t")))) { continue }
+        if (c == "=") { break }
+        val d = b64Digits.indexOf(c)
+        if (d < 0) { return null }
+        acc = (acc shl 6) bor d
+        bits = bits + 6
+        if (bits >= 8) {
+            bits = bits - 8
+            out.byte((acc shr bits) band 0xFF)
+        }
+    }
+    return out
+}
+
+// ------------------------------------------------------------------ SHA-1
+
+func rol32(v: Int, n: Int): Int {
+    val x = v band 0xFFFF_FFFF
+    return ((x shl n) bor (x ushr (32 - n))) band 0xFFFF_FFFF
+}
+
+/// The SHA-1 digest of a buffer, as twenty bytes.
+///
+/// It is here for one reason: the WebSocket handshake specifies it, by name,
+/// as a fixed transformation of a header — not as a security claim. Nothing
+/// in kealeb uses SHA-1 for anything a security claim rests on, and nothing
+/// should.
+public func sha1(msg: Buf): Buf {
+    var h0 = 0x6745_2301
+    var h1 = 0xEFCD_AB89
+    var h2 = 0x98BA_DCFE
+    var h3 = 0x1032_5476
+    var h4 = 0xC3D2_E1F0
+
+    val m = buf(msg.len + 72)
+    m.join(msg, 0, msg.len)
+    m.byte(0x80)
+    while ((m.len % 64) != 56) { m.byte(0) }
+    val bits = msg.len * 8
+    for (i in 0..8) { m.byte((bits ushr ((7 - i) * 8)) band 0xFF) }
+
+    var chunk = 0
+    while (chunk < m.len) {
+        val w: List<Int> = []
+        for (i in 0..16) {
+            val o = chunk + i * 4
+            w.add((((m.at(o) shl 24) bor (m.at(o + 1) shl 16)) bor (m.at(o + 2) shl 8)) bor m.at(o + 3))
+        }
+        for (i in 16..80) {
+            w.add(rol32(((w[i - 3] bxor w[i - 8]) bxor w[i - 14]) bxor w[i - 16], 1))
+        }
+        var a = h0
+        var b = h1
+        var c = h2
+        var d = h3
+        var e = h4
+        for (i in 0..80) {
+            var f = 0
+            var k = 0
+            if (i < 20) {
+                f = (b band c) bor ((bnot b) band d)
+                k = 0x5A82_7999
+            } else if (i < 40) {
+                f = (b bxor c) bxor d
+                k = 0x6ED9_EBA1
+            } else if (i < 60) {
+                f = ((b band c) bor (b band d)) bor (c band d)
+                k = 0x8F1B_BCDC
+            } else {
+                f = (b bxor c) bxor d
+                k = 0xCA62_C1D6
+            }
+            val t = (((rol32(a, 5) + f) + e) + (k + w[i])) band 0xFFFF_FFFF
+            e = d
+            d = c
+            c = rol32(b, 30)
+            b = a
+            a = t
+        }
+        h0 = (h0 + a) band 0xFFFF_FFFF
+        h1 = (h1 + b) band 0xFFFF_FFFF
+        h2 = (h2 + c) band 0xFFFF_FFFF
+        h3 = (h3 + d) band 0xFFFF_FFFF
+        h4 = (h4 + e) band 0xFFFF_FFFF
+        chunk = chunk + 64
+    }
+
+    val out = buf(20)
+    for (v in [h0, h1, h2, h3, h4]) {
+        for (i in 0..4) { out.byte((v ushr ((3 - i) * 8)) band 0xFF) }
+    }
+    return out
+}

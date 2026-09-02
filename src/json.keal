@@ -1,0 +1,375 @@
+/// JSON, both ways.
+///
+/// It exists for two reasons: the live protocol is JSON, and a framework that
+/// can answer a browser but not a `fetch` is half a framework. It is one
+/// class with a tag rather than six types, for the same reason the component
+/// tree is — a trait is not a type in Keal, so a heterogeneous list needs a
+/// tag on one class.
+///
+/// Numbers are `Float` inside, which is what JSON says a number is. `int()`
+/// truncates, and is the accessor a program that means an integer should use.
+
+import "./bytes.keal"
+
+public val jsonNull: Int = 0
+public val jsonBool: Int = 1
+public val jsonNumber: Int = 2
+public val jsonString: Int = 3
+public val jsonArray: Int = 4
+public val jsonObject: Int = 5
+
+/// One JSON value.
+public class Json(
+    /// Which of the six it is.
+    public val kind: Int,
+    package val flag: Bool,
+    package val num: Float,
+    package val str: String,
+    package val items: List<Json>,
+    package val fields: Map<String, Json>
+) {
+    public func isNull(): Bool { return this.kind == jsonNull }
+
+    /// The string, or `fallback` when it is not one.
+    public func text(fallback: String = ""): String {
+        return this.kind == jsonString ? this.str : fallback
+    }
+
+    /// The number, or `fallback`.
+    public func number(fallback: Float = 0.0): Float {
+        return this.kind == jsonNumber ? this.num : fallback
+    }
+
+    /// The number, truncated towards zero, or `fallback`.
+    public func int(fallback: Int = 0): Int {
+        return this.kind == jsonNumber ? this.num.toInt() : fallback
+    }
+
+    /// The boolean, or `fallback`.
+    public func bool(fallback: Bool = false): Bool {
+        return this.kind == jsonBool ? this.flag : fallback
+    }
+
+    /// A field of an object, or `null` — which is a different thing from a
+    /// field whose value is JSON `null`, and the difference is why this
+    /// answers `Json?` rather than `Json`.
+    public func field(name: String): Json? {
+        return this.kind == jsonObject ? this.fields.get(name) : null
+    }
+
+    /// A field's string, or `fallback`. The short way to read a message.
+    public func str(name: String, fallback: String = ""): String {
+        val f = this.field(name)
+        if (f == null) { return fallback }
+        return f.text(fallback)
+    }
+
+    /// A field's number, truncated, or `fallback`.
+    public func intAt(name: String, fallback: Int = 0): Int {
+        val f = this.field(name)
+        if (f == null) { return fallback }
+        return f.int(fallback)
+    }
+
+    /// An element of an array, or `null`.
+    public func at(i: Int): Json? {
+        if (this.kind != jsonArray) { return null }
+        if ((i < 0) or (i >= this.items.size)) { return null }
+        return this.items[i]
+    }
+
+    /// How many elements or fields.
+    public func size(): Int {
+        return when (this.kind) {
+            jsonArray -> this.items.size
+            jsonObject -> this.fields.size
+            else -> 0
+        }
+    }
+
+    /// The names of an object's fields, in the order they were written.
+    public func names(): List<String> {
+        return this.kind == jsonObject ? this.fields.keys() : []
+    }
+
+    /// Back to text.
+    public func write(): String {
+        val out = buf(256)
+        writeJson(this, out)
+        return out.all()
+    }
+}
+
+func emptyItems(): List<Json> { return [] }
+func emptyFields(): Map<String, Json> { return {} }
+
+public func jNull(): Json { return Json(jsonNull, false, 0.0, "", emptyItems(), emptyFields()) }
+public func jBool(v: Bool): Json { return Json(jsonBool, v, 0.0, "", emptyItems(), emptyFields()) }
+public func jNum(v: Float): Json { return Json(jsonNumber, false, v, "", emptyItems(), emptyFields()) }
+public func jInt(v: Int): Json { return Json(jsonNumber, false, v.toFloat(), "", emptyItems(), emptyFields()) }
+public func jStr(v: String): Json { return Json(jsonString, false, 0.0, v, emptyItems(), emptyFields()) }
+public func jArr(v: List<Json>): Json { return Json(jsonArray, false, 0.0, "", v, emptyFields()) }
+public func jObj(v: Map<String, Json>): Json { return Json(jsonObject, false, 0.0, "", emptyItems(), v) }
+
+/// A list of strings as a JSON array — the shape half the messages take.
+public func jStrs(v: List<String>): Json {
+    val out: List<Json> = []
+    for (s in v) { out.add(jStr(s)) }
+    return jArr(out)
+}
+
+// ----------------------------------------------------------------- writing
+
+/// A string, quoted and escaped. Control characters go out as `\u00xx`; the
+/// forward slash is left alone, because escaping it is a habit from embedding
+/// JSON in HTML and this framework escapes HTML properly instead.
+public func quote(s: String): String {
+    val out = buf(s.length + 16)
+    out.byte(34)
+    for (c in s) {
+        val v = c.code()
+        if (c == "\"") { out.text("\\\"") }
+        else if (c == "\\") { out.text("\\\\") }
+        else if (v == 10) { out.text("\\n") }
+        else if (v == 13) { out.text("\\r") }
+        else if (v == 9) { out.text("\\t") }
+        else if (v == 8) { out.text("\\b") }
+        else if (v == 12) { out.text("\\f") }
+        else if (v < 32) { out.text("\\u00" + hexByte(v)) }
+        else { out.text(c) }
+    }
+    out.byte(34)
+    return out.all()
+}
+
+/// A number, written the way JSON reads it back. A whole number loses its
+/// `.0`, because `{"n": 1.0}` and `{"n": 1}` are the same JSON value and the
+/// shorter one is what a reader expects.
+public func numberText(v: Float): String {
+    if (v.isNaN()) { return "null" }
+    val i = v.toInt()
+    return i.toFloat() == v ? "${i}" : "${v}"
+}
+
+/// Write a value into a buffer.
+public proc writeJson(j: Json, out: Buf) {
+    when (j.kind) {
+        jsonNull -> out.text("null")
+        jsonBool -> out.text(j.flag ? "true" : "false")
+        jsonNumber -> out.text(numberText(j.num))
+        jsonString -> out.text(quote(j.str))
+        jsonArray -> {
+            out.byte(91)
+            var first = true
+            for (item in j.items) {
+                if (not first) { out.byte(44) }
+                first = false
+                writeJson(item, out)
+            }
+            out.byte(93)
+        }
+        else -> {
+            out.byte(123)
+            var first = true
+            for (name in j.fields.keys()) {
+                if (not first) { out.byte(44) }
+                first = false
+                out.text(quote(name))
+                out.byte(58)
+                val v = j.fields.get(name)
+                if (v == null) { out.text("null") } else { writeJson(v, out) }
+            }
+            out.byte(125)
+        }
+    }
+}
+
+// ----------------------------------------------------------------- reading
+
+/// Where the parser is. A class rather than an index passed around, because
+/// the language will not let a function move a caller's `Int`.
+class Scan(var s: String, var i: Int, var n: Int, var bad: Bool)
+
+/// Read a JSON value, or `null` when the text is not one.
+///
+/// Trailing text is an error, not something to ignore: a message that is
+/// two messages is a bug in whatever sent it, and reading the first half
+/// silently is how that bug survives.
+public func parseJson(s: String): Json? {
+    val sc = Scan(s, 0, s.length, false)
+    val v = parseValue(sc)
+    if (sc.bad) { return null }
+    skipSpace(sc)
+    if (sc.i != sc.n) { return null }
+    return v
+}
+
+proc skipSpace(var sc: Scan) {
+    while (sc.i < sc.n) {
+        val c = sc.s[sc.i]
+        if (((c == " ") or (c == "\t")) or ((c == "\n") or (c == "\r"))) { sc.i = sc.i + 1 } else { return }
+    }
+}
+
+func literal(var sc: Scan, word: String): Bool {
+    if (sc.i + word.length > sc.n) { return false }
+    if (sc.s.substring(sc.i, sc.i + word.length) != word) { return false }
+    sc.i = sc.i + word.length
+    return true
+}
+
+func parseValue(var sc: Scan): Json {
+    skipSpace(sc)
+    if (sc.i >= sc.n) { sc.bad = true; return jNull() }
+    val c = sc.s[sc.i]
+    if (c == "{") { return parseObject(sc) }
+    if (c == "[") { return parseArray(sc) }
+    if (c == "\"") { return jStr(parseString(sc)) }
+    if (literal(sc, "true")) { return jBool(true) }
+    if (literal(sc, "false")) { return jBool(false) }
+    if (literal(sc, "null")) { return jNull() }
+    return parseNumber(sc)
+}
+
+func parseObject(var sc: Scan): Json {
+    sc.i = sc.i + 1
+    val fields: Map<String, Json> = {}
+    skipSpace(sc)
+    if ((sc.i < sc.n) and (sc.s[sc.i] == "}")) { sc.i = sc.i + 1; return jObj(fields) }
+    while (not sc.bad) {
+        skipSpace(sc)
+        if ((sc.i >= sc.n) or (sc.s[sc.i] != "\"")) { sc.bad = true; return jNull() }
+        val name = parseString(sc)
+        skipSpace(sc)
+        if ((sc.i >= sc.n) or (sc.s[sc.i] != ":")) { sc.bad = true; return jNull() }
+        sc.i = sc.i + 1
+        fields.set(name, parseValue(sc))
+        skipSpace(sc)
+        if (sc.i >= sc.n) { sc.bad = true; return jNull() }
+        val c = sc.s[sc.i]
+        sc.i = sc.i + 1
+        if (c == "}") { return jObj(fields) }
+        if (c != ",") { sc.bad = true; return jNull() }
+    }
+    return jNull()
+}
+
+func parseArray(var sc: Scan): Json {
+    sc.i = sc.i + 1
+    val items: List<Json> = []
+    skipSpace(sc)
+    if ((sc.i < sc.n) and (sc.s[sc.i] == "]")) { sc.i = sc.i + 1; return jArr(items) }
+    while (not sc.bad) {
+        items.add(parseValue(sc))
+        skipSpace(sc)
+        if (sc.i >= sc.n) { sc.bad = true; return jNull() }
+        val c = sc.s[sc.i]
+        sc.i = sc.i + 1
+        if (c == "]") { return jArr(items) }
+        if (c != ",") { sc.bad = true; return jNull() }
+    }
+    return jNull()
+}
+
+func hexNibble(c: String): Int {
+    val v = c.code()
+    if ((v >= 48) and (v <= 57)) { return v - 48 }
+    if ((v >= 97) and (v <= 102)) { return (v - 97) + 10 }
+    if ((v >= 65) and (v <= 70)) { return (v - 65) + 10 }
+    return -1
+}
+
+func parseString(var sc: Scan): String {
+    sc.i = sc.i + 1
+    val out = buf(32)
+    while (sc.i < sc.n) {
+        val c = sc.s[sc.i]
+        sc.i = sc.i + 1
+        if (c == "\"") { return out.all() }
+        if (c != "\\") { out.text(c); continue }
+        if (sc.i >= sc.n) { sc.bad = true; return "" }
+        val e = sc.s[sc.i]
+        sc.i = sc.i + 1
+        if (e == "n") { out.byte(10) }
+        else if (e == "t") { out.byte(9) }
+        else if (e == "r") { out.byte(13) }
+        else if (e == "b") { out.byte(8) }
+        else if (e == "f") { out.byte(12) }
+        else if (e == "u") { writeEscape(sc, out) }
+        else if (((e == "\"") or (e == "\\")) or (e == "/")) { out.text(e) }
+        else { sc.bad = true; return "" }
+    }
+    sc.bad = true
+    return ""
+}
+
+/// `\uXXXX`, including the surrogate pair a character above the basic plane
+/// arrives as. What is written out is UTF-8, because that is what a Keal
+/// string is.
+proc writeEscape(var sc: Scan, var out: Buf) {
+    var v = readHex4(sc)
+    if (v < 0) { sc.bad = true; return }
+    if ((v >= 0xD800) and (v <= 0xDBFF)) {
+        if (((sc.i + 1) < sc.n) and ((sc.s[sc.i] == "\\") and (sc.s[sc.i + 1] == "u"))) {
+            sc.i = sc.i + 2
+            val lo = readHex4(sc)
+            if (lo < 0) { sc.bad = true; return }
+            if ((lo >= 0xDC00) and (lo <= 0xDFFF)) {
+                v = (0x10000 + ((v - 0xD800) shl 10)) + (lo - 0xDC00)
+            } else {
+                v = 0xFFFD
+            }
+        } else {
+            v = 0xFFFD
+        }
+    } else if ((v >= 0xDC00) and (v <= 0xDFFF)) {
+        v = 0xFFFD
+    }
+    if (v < 0x80) {
+        out.byte(v)
+    } else if (v < 0x800) {
+        out.byte(0xC0 bor (v shr 6))
+        out.byte(0x80 bor (v band 0x3F))
+    } else if (v < 0x10000) {
+        out.byte(0xE0 bor (v shr 12))
+        out.byte(0x80 bor ((v shr 6) band 0x3F))
+        out.byte(0x80 bor (v band 0x3F))
+    } else {
+        out.byte(0xF0 bor (v shr 18))
+        out.byte(0x80 bor ((v shr 12) band 0x3F))
+        out.byte(0x80 bor ((v shr 6) band 0x3F))
+        out.byte(0x80 bor (v band 0x3F))
+    }
+}
+
+func readHex4(var sc: Scan): Int {
+    if (sc.i + 4 > sc.n) { return -1 }
+    var v = 0
+    for (k in 0..4) {
+        val d = hexNibble(sc.s[sc.i + k])
+        if (d < 0) { return -1 }
+        v = (v * 16) + d
+    }
+    sc.i = sc.i + 4
+    return v
+}
+
+func parseNumber(var sc: Scan): Json {
+    val start = sc.i
+    if ((sc.i < sc.n) and (sc.s[sc.i] == "-")) { sc.i = sc.i + 1 }
+    while (sc.i < sc.n) {
+        val c = sc.s[sc.i]
+        val v = c.code()
+        val digit = (v >= 48) and (v <= 57)
+        if (((digit or (c == ".")) or ((c == "e") or (c == "E"))) or ((c == "+") or (c == "-"))) {
+            sc.i = sc.i + 1
+        } else {
+            break
+        }
+    }
+    if (sc.i == start) { sc.bad = true; return jNull() }
+    val slice = sc.s.substring(start, sc.i)
+    val f = slice.toFloat()
+    if (f == null) { sc.bad = true; return jNull() }
+    return jNum(f)
+}

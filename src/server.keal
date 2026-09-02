@@ -1,0 +1,447 @@
+/// The server: one thread, one `poll`, and a state machine per connection.
+///
+/// Every socket is non-blocking and nothing ever waits on one. The loop asks
+/// the kernel which descriptors are ready, moves what it can on each, and
+/// goes back to sleep. A handler therefore runs to completion with nothing
+/// else running — session state is an ordinary Keal object, there is no lock
+/// anywhere in kealeb, and a race is not a thing that can be written here.
+///
+/// The cost of that choice is stated plainly rather than hidden: a handler
+/// that blocks blocks the server. Handlers are expected to answer and return.
+/// Several loops on several cores can be added later without any of this
+/// changing shape, because nothing below assumes it is the only one.
+
+import "./bytes.keal"
+import "./ffi.keal"
+import "./http.keal"
+import "./router.keal"
+import "./text.keal"
+import "./ws.keal"
+
+/// A connection is reading requests, or it has been handed over to the
+/// WebSocket framing and is reading frames. Those are the two states, and the
+/// switch between them happens once, in `consume`.
+package val modeHttp: Int = 0
+package val modeSocket: Int = 1
+
+/// One live connection.
+public class Conn(
+    public val fd: Int,
+    package val inBuf: Buf,
+    package val outBuf: Buf,
+    /// How much of `outBuf` has left the machine.
+    package var sent: Int,
+    /// Where the header scan stopped last time, so a slow trickle of bytes
+    /// does not rescan what it has already seen.
+    package var scanned: Int,
+    package var closeWhenDrained: Bool,
+    package var mode: Int,
+    package var lastMs: Int,
+    /// How many requests this connection has answered — the number a
+    /// keep-alive limit counts.
+    package var served: Int,
+    public var peer: String,
+    /// A message being assembled out of continuation frames.
+    package var partial: Buf,
+    package var partialOp: Int
+)
+
+func newConn(fd: Int, peer: String): Conn {
+    return Conn(fd, buf(2048), buf(2048), 0, 0, false, modeHttp, monoMs(), 0, peer, buf(16), opText)
+}
+
+/// The server.
+///
+/// `handle` is what answers a request. It defaults to dispatching through
+/// `router`, and a program that wants something else — a filter chain, a
+/// single function, a proxy — replaces it and keeps everything else.
+public class Server(
+    /// The routing table `handle` reads by default.
+    public val router: Router,
+    /// The address to bind. `127.0.0.1` while developing, `""` for every
+    /// interface. The default is the one that cannot surprise anybody.
+    public var host: String,
+    /// The port. 0 asks the machine for a free one, which `port()` then
+    /// reports — what a test wants.
+    public var port: Int,
+    /// The whole of request handling, as one function.
+    public var handle: (Request) -> Response,
+    /// A line per request on standard output.
+    public var log: Bool,
+    /// The largest request head accepted, in bytes. Bigger is 431.
+    public var maxHead: Int,
+    /// The largest body accepted, in bytes. Bigger is 413.
+    public var maxBody: Int,
+    /// How long a connection may sit idle before it is closed, in
+    /// milliseconds.
+    public var idleMs: Int,
+    /// How many requests one connection may serve before it is asked to go
+    /// away. A bound, not a policy — it keeps a client from pinning a slot
+    /// for ever.
+    public var maxRequests: Int,
+    /// A connection has become a WebSocket. The request that asked is given
+    /// too, because everything the socket needs to know about who is on the
+    /// other end — a cookie, a query parameter — was in it.
+    public var onOpen: (Int, Request) -> Unit,
+    /// A complete text message arrived on a WebSocket.
+    public var onMessage: (Int, String) -> Unit,
+    /// A WebSocket went away, for any reason.
+    public var onClose: (Int) -> Unit,
+    package var listenFd: Int,
+    package var conns: Map<Int, Conn>,
+    package var stopping: Bool
+) {
+    /// Bind, and answer the port actually taken. Called by `run`; call it
+    /// yourself when you need the port before serving — a test does.
+    public func open(): Int {
+        if (this.listenFd >= 0) { return this.port }
+        ignoreSigpipe()
+        stdoutLines()
+        val fd = listenOn(this.host, this.port, 512)
+        if (fd < 0) {
+            val why = when (fd) {
+                -1 -> "the machine refused a socket"
+                -2 -> "`${this.host}` is not an IPv4 address"
+                -3 -> "port ${this.port} is already taken"
+                else -> "the machine refused to listen"
+            }
+            panic("kealeb could not start: ${why}")
+        }
+        this.listenFd = fd
+        this.port = localPort(fd)
+        watch(fd, readable)
+        return this.port
+    }
+
+    /// Serve until `stop` is called — which, with one thread, means until a
+    /// handler calls it.
+    public proc run() {
+        this.open()
+        if (this.log) {
+            val shown = this.host.isEmpty() ? "0.0.0.0" : this.host
+            println("kealeb listening on http://${shown}:${this.port}")
+        }
+        while (not this.stopping) { this.tick(200) }
+        this.shut()
+    }
+
+    /// One turn of the loop: wait up to `ms`, then move whatever is ready.
+    /// Exposed because a test wants to drive the server by hand, and because
+    /// a program that has its own loop should be able to host this one.
+    public proc tick(ms: Int) {
+        val n = pollWait(ms)
+        var i = 0
+        while (i < n) {
+            val fd = readyFd(i)
+            val ev = readyEvents(i)
+            i = i + 1
+            if (fd == this.listenFd) {
+                this.acceptAll()
+                continue
+            }
+            val c = this.conns.get(fd)
+            if (c == null) { continue }
+            if ((ev band gone) != 0) { this.drop(c); continue }
+            if ((ev band readable) != 0) {
+                if (not this.readFrom(c)) { continue }
+            }
+            if ((ev band writable) != 0) { this.flush(c) }
+        }
+        this.sweep()
+    }
+
+    /// Ask the loop to stop at the end of this turn.
+    public proc stop() { this.stopping = true }
+
+    /// How many connections are open.
+    public func connections(): Int { return this.conns.size }
+
+    // ------------------------------------------------------------ inwards
+
+    proc acceptAll() {
+        while (true) {
+            val fd = acceptOn(this.listenFd)
+            if (fd < 0) { return }
+            if (watch(fd, readable) == 0) {
+                // The watch set is full. Refusing here, now, is the honest
+                // answer; accepting and never reading is not.
+                closeFd(fd)
+                continue
+            }
+            this.conns.set(fd, newConn(fd, peerOf(fd)))
+        }
+    }
+
+    /// Read what is waiting. Answers false when the connection is gone.
+    func readFrom(var c: Conn): Bool {
+        while (true) {
+            c.inBuf.reserve(4096)
+            val got = recvInto(c.fd, c.inBuf.handle(), c.inBuf.len, 4096)
+            if (got == again) { break }
+            if (got <= 0) { this.drop(c); return false }
+            c.inBuf.len = c.inBuf.len + got
+            c.lastMs = monoMs()
+            if (got < 4096) { break }
+        }
+        if (c.mode == modeSocket) { return this.consumeFrames(c) }
+        return this.consume(c)
+    }
+
+    /// Take every complete request out of the buffer. Answers false when the
+    /// connection has been dropped along the way.
+    func consume(var c: Conn): Bool {
+        while (true) {
+            val from = c.scanned > 3 ? c.scanned - 3 : 0
+            val end = c.inBuf.find("\r\n\r\n", from)
+            if (end < 0) {
+                c.scanned = c.inBuf.len
+                if (c.inBuf.len > this.maxHead) {
+                    this.fail(c, 431, "Request header fields too large")
+                    return false
+                }
+                return true
+            }
+            val head = c.inBuf.textAt(0, end)
+            val req = parseHead(head)
+            if (req == null) {
+                this.fail(c, 400, "Malformed request")
+                return false
+            }
+            if (req.hasHeader("transfer-encoding")) {
+                // Chunked request bodies are not read yet, and saying so is
+                // better than reading the head of one as the whole of it.
+                this.fail(c, 501, "Chunked request bodies are not supported yet")
+                return false
+            }
+            val lengthText = req.headerOr("content-length", "0").trim()
+            val length = lengthText.toInt() ?: -1
+            if (length < 0) {
+                this.fail(c, 400, "Bad Content-Length")
+                return false
+            }
+            if (length > this.maxBody) {
+                this.fail(c, 413, "Body too large")
+                return false
+            }
+            val bodyAt = end + 4
+            if (c.inBuf.len < bodyAt + length) {
+                if (req.headerOr("expect", "").toLower().contains("100-continue")) {
+                    c.outBuf.text("HTTP/1.1 100 Continue\r\n\r\n")
+                    this.flush(c)
+                }
+                return true
+            }
+            if (length > 0) {
+                val body = buf(length)
+                body.raw(c.inBuf.handle(), bodyAt, length)
+                req.body = body
+            }
+            req.peer = c.peer
+            c.inBuf.drop(bodyAt + length)
+            c.scanned = 0
+            c.served = c.served + 1
+
+            val keep = req.keepAlive() and (c.served < this.maxRequests)
+            val started = monoMs()
+            val res = this.answer(req)
+            if (res.upgrade) {
+                writeSwitch(res, c.outBuf)
+                c.mode = modeSocket
+                c.scanned = 0
+                if (this.log) {
+                    println("${req.method} ${req.target} → ${res.code} websocket ${c.peer}")
+                }
+                if (not this.flush(c)) { return false }
+                this.onOpen(c.fd, req)
+                return this.consumeFrames(c)
+            }
+            writeResponse(res, c.outBuf, keep, req.method == "HEAD")
+            if (this.log) {
+                println("${req.method} ${req.target} → ${res.code} ${res.length()}b ${monoMs() - started}ms ${c.peer}")
+            }
+            if (not keep) { c.closeWhenDrained = true }
+            if (not this.flush(c)) { return false }
+            if (c.closeWhenDrained) { return false }
+        }
+        return true
+    }
+
+    /// Run the handler, and turn anything it throws into a 500 rather than
+    /// into a dead server. What the handler was doing wrong still reaches
+    /// standard error, because a 500 with no explanation anywhere is how a
+    /// framework wastes an afternoon.
+    func answer(req: Request): Response {
+        try {
+            return this.handle(req)
+        } catch (e) {
+            println("kealeb: handler for ${req.method} ${req.path} threw: ${e}")
+            return serverError()
+        }
+    }
+
+    /// Take every complete frame out of the buffer. A control frame is
+    /// answered here — a ping with a pong, a close with a close — because
+    /// none of them is a message and none of them is the application's
+    /// business.
+    func consumeFrames(var c: Conn): Bool {
+        while (true) {
+            val f = readFrame(c.inBuf, 0, this.maxBody)
+            if (f == null) {
+                if (c.inBuf.len > this.maxBody) {
+                    this.closeSocket(c, 1009, "frame too large")
+                    return false
+                }
+                return true
+            }
+            if (f.opcode == opBad) {
+                this.closeSocket(c, 1002, "protocol error")
+                return false
+            }
+            c.inBuf.drop(f.used)
+            c.lastMs = monoMs()
+
+            if (f.opcode == opClose) {
+                this.closeSocket(c, 1000, "")
+                return false
+            }
+            if (f.opcode == opPing) {
+                writeFrame(c.outBuf, opPong, f.payload)
+                if (not this.flush(c)) { return false }
+                continue
+            }
+            if (f.opcode == opPong) { continue }
+
+            if (f.opcode == opContinue) {
+                c.partial.join(f.payload, 0, f.payload.len)
+            } else {
+                c.partial.clear()
+                c.partial.join(f.payload, 0, f.payload.len)
+                c.partialOp = f.opcode
+            }
+            if (not f.fin) {
+                if (c.partial.len > this.maxBody) {
+                    this.closeSocket(c, 1009, "message too large")
+                    return false
+                }
+                continue
+            }
+            if (c.partialOp == opText) {
+                val message = c.partial.all()
+                c.partial.clear()
+                try {
+                    this.onMessage(c.fd, message)
+                } catch (e) {
+                    println("kealeb: a socket handler threw: ${e}")
+                }
+                if (not this.conns.containsKey(c.fd)) { return false }
+                if (not this.flush(c)) { return false }
+            } else {
+                // Binary messages have no meaning in kealeb's own protocol,
+                // and inventing one here would be inventing it in the wrong
+                // file. They are dropped, deliberately and silently.
+                c.partial.clear()
+            }
+        }
+        return true
+    }
+
+    /// Send a text message on a WebSocket. Does nothing when the descriptor
+    /// is not one, which is what a session that has already gone away is.
+    public proc send(fd: Int, message: String) {
+        val c = this.conns.get(fd)
+        if (c == null) { return }
+        if (c.mode != modeSocket) { return }
+        writeText(c.outBuf, message)
+        this.flush(c)
+    }
+
+    /// Close a WebSocket politely, then drop it.
+    public proc closeSocket(var c: Conn, code: Int, reason: String) {
+        writeClose(c.outBuf, code, reason)
+        c.closeWhenDrained = true
+        this.flush(c)
+        if (this.conns.containsKey(c.fd)) { this.drop(c) }
+    }
+
+    // ----------------------------------------------------------- outwards
+
+    /// Push what is queued. Answers false when the connection was dropped.
+    func flush(var c: Conn): Bool {
+        while (c.sent < c.outBuf.len) {
+            val n = sendFrom(c.fd, c.outBuf.handle(), c.sent, c.outBuf.len - c.sent)
+            if (n == again) {
+                watch(c.fd, readable bor writable)
+                return true
+            }
+            if (n <= 0) { this.drop(c); return false }
+            c.sent = c.sent + n
+            c.lastMs = monoMs()
+        }
+        c.outBuf.clear()
+        c.sent = 0
+        if (c.closeWhenDrained) { this.drop(c); return false }
+        watch(c.fd, readable)
+        return true
+    }
+
+    /// Answer with a status and close. Used for the failures that make the
+    /// rest of the byte stream meaningless.
+    proc fail(var c: Conn, code: Int, message: String) {
+        val res = notFound(message).status(code)
+        writeResponse(res, c.outBuf, false, false)
+        c.closeWhenDrained = true
+        this.flush(c)
+    }
+
+    proc drop(c: Conn) {
+        val wasSocket = c.mode == modeSocket
+        unwatch(c.fd)
+        closeFd(c.fd)
+        this.conns.remove(c.fd)
+        if (wasSocket) {
+            try {
+                this.onClose(c.fd)
+            } catch (e) {
+                println("kealeb: a close handler threw: ${e}")
+            }
+        }
+    }
+
+    /// Close what has been silent too long. A connection nobody is using is
+    /// a descriptor somebody else could have.
+    proc sweep() {
+        if (this.idleMs <= 0) { return }
+        val now = monoMs()
+        val doomed: List<Conn> = []
+        for (fd in this.conns.keys()) {
+            val c = this.conns.get(fd)
+            if (c == null) { continue }
+            if ((now - c.lastMs) > this.idleMs) { doomed.add(c) }
+        }
+        for (c in doomed) { this.drop(c) }
+    }
+
+    proc shut() {
+        for (fd in this.conns.keys()) {
+            unwatch(fd)
+            closeFd(fd)
+        }
+        this.conns.clear()
+        if (this.listenFd >= 0) {
+            unwatch(this.listenFd)
+            closeFd(this.listenFd)
+            this.listenFd = -1
+        }
+    }
+}
+
+/// A server over a routing table, with the defaults a development machine
+/// wants: localhost, one line of log per request, and limits that are large
+/// enough not to be met by accident and small enough to be a limit.
+public func server(router: Router, port: Int = 8080, host: String = "127.0.0.1"): Server {
+    val conns: Map<Int, Conn> = {}
+    return Server(router, host, port, { r -> dispatch(router, r) }, true,
+                  64 * 1024, 8 * 1024 * 1024, 30000, 1000,
+                  { fd: Int, req: Request -> }, { fd: Int, message: String -> }, { fd: Int -> },
+                  -1, conns, false)
+}

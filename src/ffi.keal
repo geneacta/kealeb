@@ -1,0 +1,120 @@
+/// The C boundary, and the only file in kealeb that contains any C.
+///
+/// Every declaration below binds a `static inline` function from
+/// `runtime/kb.h`, which the C compiler pastes into this very translation
+/// unit — so a call to `blobGet` is a load and a call to `recv` is the system
+/// call, not a hop through a shared library. That is what lets the HTTP
+/// parser, the router, the renderer and the WebSocket framing above be
+/// written in Keal.
+///
+/// Nothing else in kealeb declares `native` or `extern`. If a platform needs
+/// something new, it is added here and in `runtime/kb.h`, in one place.
+
+native """
+#include "kb.h"
+"""
+
+// --------------------------------------------------------------- answers
+
+/// The peer closed the connection, cleanly.
+public val closed: Int = 0
+/// Nothing to move right now — wait for the next `poll`.
+public val again: Int = -1
+/// The descriptor is finished; drop it.
+public val failed: Int = -2
+
+/// Interest and readiness bits.
+public val readable: Int = 1
+public val writable: Int = 2
+/// Only ever reported, never asked for.
+public val gone: Int = 4
+
+// ----------------------------------------------------------------- blobs
+
+/// `size` zeroed bytes outside Keal's heap. Answers a handle, or 0.
+public extern func blobNew(size: Int): Int = "kb_blob_new"
+/// How many bytes the blob holds. 0 for the absent blob.
+public extern func blobSize(h: Int): Int = "kb_blob_size"
+/// The byte at `i`, or -1 when there is none.
+public extern func blobGet(h: Int, i: Int): Int = "kb_blob_get"
+/// Write one byte. Out of range does nothing.
+public extern proc blobSet(h: Int, i: Int, v: Int) = "kb_blob_set"
+/// Give the bytes back. Every `blobNew`, `blobGrow`, `blobGrow` and
+/// `fileRead` owes one of these.
+public extern proc blobFree(h: Int) = "kb_blob_free"
+/// A bigger blob holding what this one holds. The old handle stays valid and
+/// is still the caller's to free.
+public extern func blobGrow(h: Int, size: Int): Int = "kb_blob_grow"
+/// Move bytes between blobs, or within one. Answers what it moved.
+public extern func blobCopy(dst: Int, dof: Int, src: Int, sof: Int, len: Int): Int = "kb_blob_copy"
+/// The bytes of a String, into a blob at `off`. Answers what it wrote, or -1
+/// when they do not fit.
+public extern func blobWrite(h: Int, off: Int, s: borrow String): Int = "kb_blob_write"
+/// `len` bytes of the blob as a String. Anything that is not well-formed
+/// UTF-8 arrives as U+FFFD rather than as a String that is not one.
+public extern func blobText(h: Int, off: Int, len: Int): own String = "kb_blob_text"
+/// How many *bytes* a String occupies. `String.length` counts characters,
+/// and a `Content-Length` counts bytes.
+public extern func textBytes(s: borrow String): Int = "kb_text_bytes"
+
+// --------------------------------------------------------------- sockets
+
+/// Never die because a browser closed a tab mid-response.
+public extern proc ignoreSigpipe() = "kb_ignore_sigpipe"
+/// Line-buffer standard output, so a log piped to a file arrives as it is
+/// written rather than in four-kilobyte bursts.
+public extern proc stdoutLines() = "kb_stdout_lines"
+/// Bind and listen. `host` is a dotted IPv4 address, or "" for every
+/// interface. Answers the descriptor, or which step failed: -1 socket,
+/// -2 address, -3 bind, -4 listen.
+public extern func listenOn(host: borrow String, port: Int, backlog: Int): Int = "kb_listen"
+/// The port a listener actually got — the question worth asking when it was
+/// asked for 0.
+public extern func localPort(fd: Int): Int = "kb_local_port"
+/// The next waiting connection, or `again`. What comes back is non-blocking
+/// and has Nagle switched off.
+public extern func acceptOn(fd: Int): Int = "kb_accept"
+/// The peer's address as text, or "".
+public extern func peerOf(fd: Int): own String = "kb_peer"
+/// Read into a blob. Answers the count, or `closed` / `again` / `failed`.
+public extern func recvInto(fd: Int, h: Int, off: Int, max: Int): Int = "kb_recv"
+/// Write from a blob. A short write is ordinary and is the caller's to
+/// resume. Answers the count, or `again` / `failed`.
+public extern func sendFrom(fd: Int, h: Int, off: Int, len: Int): Int = "kb_send"
+/// Close a descriptor.
+public extern proc closeFd(fd: Int) = "kb_close"
+
+// -------------------------------------------------------------- the wait
+
+/// Watch `fd` for `events`, replacing any earlier interest. 1, or 0 when the
+/// set is full.
+public extern func watch(fd: Int, events: Int): Int = "kb_watch"
+/// Stop watching.
+public extern proc unwatch(fd: Int) = "kb_unwatch"
+/// How many descriptors are being watched.
+public extern func watching(): Int = "kb_watching"
+/// Wait until something is ready or `ms` have passed; negative waits for
+/// ever. Answers how many are ready, and freezes them so that a handler may
+/// close a connection while the list is being walked.
+public extern func pollWait(ms: Int): Int = "kb_poll"
+public extern func readyFd(i: Int): Int = "kb_ready_fd"
+public extern func readyEvents(i: Int): Int = "kb_ready_events"
+
+// ------------------------------------------------------ clock and chance
+
+/// Milliseconds since an arbitrary fixed point — for differences, which must
+/// not jump when the wall clock is corrected.
+public extern func monoMs(): Int = "kb_mono_ms"
+/// Seconds since the epoch — what a `Date` header and a cookie expiry mean.
+public extern func epochS(): Int = "kb_epoch_s"
+/// Eight bytes nobody can guess. -1 if the machine could not provide them,
+/// which must be treated as the failure it is rather than as a number.
+public extern func secureRandom(): Int = "kb_secure_random"
+
+// ------------------------------------------------------------- the files
+
+/// A file's bytes, or 0. `readFile` answers text; a stylesheet, an image and
+/// a font are not text.
+public extern func fileRead(path: borrow String): Int = "kb_file_read"
+/// When a file last changed, in seconds since the epoch, or -1.
+public extern func fileMtime(path: borrow String): Int = "kb_file_mtime"
