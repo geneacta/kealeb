@@ -3,10 +3,20 @@
 #
 #   tools/test.sh
 #
-# `units` needs no network: it holds the buffers, the encodings, the parser,
-# the router, the renderer and the asset rules to their answers. `wire` starts
-# a real server on a port the machine chooses and talks to it over a socket,
-# which is the only way to check the framing.
+# Six steps, and two of them are controls.
+#
+#   guide     every snippet the guide promises, compiled
+#   units     the buffers, encodings, parser, router, renderer and diff
+#   lifetime  an application built, used, dropped — and leaving nothing
+#   leaks     a cycle built on purpose, which the audit must still see
+#   cc        the C the backend emitted, read under five -Werror names,
+#             each of which is first handed a fault it must refuse
+#   client    the real client script, against a real server, over a socket
+#
+# `lifetime` and `cc` both assert negatives, and a negative goes green the
+# moment the instrument stops working. `leaks` and the fault files are what
+# say the instruments still work. A suite that only ever checks for the
+# absence of a thing needs something that checks it can still find one.
 set -e
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -21,8 +31,6 @@ fi
 
 for t in tests/*.keal; do
   name=$(basename "$t" .keal)
-  # lifetime is built with --audit below, and building it twice would say the
-  # same thing twice while meaning less the second time.
   # Both of these are built with --audit below; building them twice would say
   # the same thing twice while meaning less the second time.
   [ "$name" = "lifetime" ] && continue
@@ -79,43 +87,73 @@ echo "a cycle built on purpose is still reported as exactly one"
 # means "the backend emitted code its own C compiler thinks is wrong" is an
 # error. `keal build` does not do this and should not: a user's `native` block
 # may legitimately warn. This checks what the *backend* wrote.
+# The five names, written once.
+#
+# Everything below is built from this list: the flags the emitted C is
+# compiled under, and the fault each name must refuse. Two lists would let one
+# drift from the other — proving a flag nobody uses, or using one nobody
+# proved — and the drift is invisible because both halves stay green.
+STRICT="incompatible-pointer-types implicit-function-declaration int-conversion
+        comment parentheses"
+
+# The smallest C that commits exactly one of those errors. A name with no
+# fault written for it is a name this step cannot prove, so it is refused
+# rather than skipped.
+fault() {
+  case $1 in
+    incompatible-pointer-types)
+      printf 'int f(long x){return (int)x;}\nint g(void){int(*p)(void)=f;return p();}\n' ;;
+    implicit-function-declaration)
+      printf 'int g(void){return nosuchfn();}\n' ;;
+    int-conversion)
+      printf 'int *g(void){return 1;}\n' ;;
+    comment)
+      printf '/* /* */\nint g(void){return 0;}\n' ;;
+    parentheses)
+      printf 'int g(int a,int b){ if (a = b) return 1; return 0; }\n' ;;
+    *)
+      # On stderr: this function's standard output is the fault file itself,
+      # and a diagnostic written there would be compiled instead of read.
+      echo "FAILED — no fault is written for -Werror=$1, so nothing proves it" >&2
+      echo "  bites. Either write one beside the others, or fix the spelling" >&2
+      echo "  in STRICT — a misspelt name arrives here, because a name that" >&2
+      echo "  is not one of the five has no fault of its own." >&2
+      return 1 ;;
+  esac
+}
+
 printf '%-8s ' "cc"
-mkdir -p build
+mkdir -p build/probe
+
+# The control comes first: a flag that rejects nothing lets everything past,
+# so there is no point compiling anything under a barrier that has not been
+# shown to be one. `cc` accepts an unknown -Werror= name with a warning and
+# exits 0, so a misspelling would otherwise be a barrier made of nothing.
+proven=0
+for name in $STRICT; do
+  fault "$name" > "build/probe/$name.c" || { echo; exit 1; }
+  if cc -fsyntax-only -std=c11 "-Werror=$name" "build/probe/$name.c" 2>/dev/null; then
+    echo "FAILED — -Werror=$name accepted the fault it exists to refuse,"
+    echo "  so this compiler has the name and ignores it. The barrier is"
+    echo "  made of nothing until that is explained."
+    exit 1
+  fi
+  proven=$((proven + 1))
+done
+
+flags=""
+for name in $STRICT; do flags="$flags -Werror=$name"; done
+
 emitted=0
 for t in tests/units.keal examples/todo.keal examples/counter.keal; do
   out="build/$(basename "$t" .keal).c"
   "$KEALC" emit-c "$t" -Iruntime > "$out"
-  # The same five names keal's own corpus is held to. Three of them —
-  # incompatible-pointer-types, implicit-function-declaration, int-conversion
-  # — mean the backend contradicted itself. The other two are what keal-view's
-  # bootstrap turned up.
-  cc -fsyntax-only -std=c11 -Iruntime \
-     -Werror=incompatible-pointer-types \
-     -Werror=implicit-function-declaration \
-     -Werror=int-conversion \
-     -Werror=comment \
-     -Werror=parentheses "$out"
+  # shellcheck disable=SC2086
+  cc -fsyntax-only -std=c11 -Iruntime $flags "$out"
   emitted=$((emitted + 1))
 done
-# And the control for this step, for the same reason as `leaks`: five flags
-# that reject nothing pass everything. Each name is given its own fault and
-# must refuse it.
-probe=build/probe
-mkdir -p "$probe"
-printf 'int f(long x){return (int)x;}\nint g(void){int(*p)(void)=f;return p();}\n' > "$probe/incompatible-pointer-types.c"
-printf 'int g(void){return nosuchfn();}\n' > "$probe/implicit-function-declaration.c"
-printf 'int *g(void){return 1;}\n' > "$probe/int-conversion.c"
-printf '/* /* */\nint g(void){return 0;}\n' > "$probe/comment.c"
-printf 'int g(int a,int b){ if (a = b) return 1; return 0; }\n' > "$probe/parentheses.c"
-for name in incompatible-pointer-types implicit-function-declaration \
-            int-conversion comment parentheses; do
-  if cc -fsyntax-only -std=c11 "-Werror=$name" "$probe/$name.c" 2>/dev/null; then
-    echo "FAILED — -Werror=$name accepted the fault it exists to refuse"
-    exit 1
-  fi
-done
 
-echo "$emitted translation units clean, and five flags that each refuse their own fault"
+echo "$proven flags each refuse their own fault, and $emitted translation units draw none of them"
 
 # The client is the one file that does not run under `keal`, so it is checked
 # against a real server in the one runtime that can run it. No node, no check —
