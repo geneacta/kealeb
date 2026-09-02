@@ -17,6 +17,15 @@
 # moment the instrument stops working. `leaks` and the fault files are what
 # say the instruments still work. A suite that only ever checks for the
 # absence of a thing needs something that checks it can still find one.
+#
+# One property this file must keep, stated because it is easy to lose by
+# accident and impossible to notice when it goes: **every binary run here is
+# one a build asserted immediately before**. `set -e` and a build step in front
+# of each run are what give that, so a leftover executable from an earlier run
+# cannot be the thing that passes. Checked by planting six of them and a
+# failing build: all six were overwritten, and the failing build stopped the
+# suite instead of running what was already there. Anything added below should
+# keep that shape.
 set -e
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
