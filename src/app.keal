@@ -9,6 +9,7 @@
 ///     a.page("/", { req -> column([h1("Hello"), p("from Keal")]) })
 ///     a.run(8080)
 
+import "./auth.keal"
 import "./bytes.keal"
 import "./css.keal"
 import "./ffi.keal"
@@ -33,7 +34,11 @@ import "./ws.keal"
 public class Chrome(
     public var title: String,
     public var style: String,
-    package var head: List<String>
+    package var head: List<String>,
+    /// Set by `App.secure`. Held here rather than on the `App` for the same
+    /// reason the title is: the page handlers capture this object once, and
+    /// `secure` may be called after the pages are registered.
+    package var guard: Auth?
 ) {
     package func markup(): String { return this.head.join("\n") }
 }
@@ -67,8 +72,25 @@ public class App(
     /// server is built; read on every request.
     public val chrome: Chrome,
     package var assets: List<Asset>,
-    package var jobs: List<Job>
+    package var jobs: List<Job>,
+    package var protection: Auth?
 ) {
+    /// Switch on the four things every application should have and none should
+    /// have to write.
+    ///
+    /// * Every form gets a hidden CSRF token, put there by the framework.
+    /// * Every `POST`, `PUT`, `PATCH` and `DELETE` is refused without it.
+    /// * Every response carries the headers that stop a browser doing
+    ///   something helpful with it.
+    /// * A WebSocket upgrade from another origin is refused.
+    ///
+    /// One line, and there is no configuration because there is nothing here
+    /// anybody should want to turn off. What you keep is what an application
+    /// really has to decide: who may sign in, and what they may then do.
+    public proc secure(a: Auth) {
+        this.protection = a
+        this.chrome.guard = a
+    }
     // ------------------------------------------------------------- routes
 
     public proc get(path: String, handler: (Request) -> Response) { this.router.get(path, handler) }
@@ -96,7 +118,8 @@ public class App(
         val chrome = this.chrome
         val own = title
         this.router.get(path, { req ->
-            html(doc(own.isEmpty() ? chrome.title : own, build(req), chrome.markup(), chrome.style))
+            html(doc(own.isEmpty() ? chrome.title : own, guarded(chrome, req, build(req)),
+                     chrome.markup(), chrome.style))
         })
     }
 
@@ -221,6 +244,11 @@ public class App(
             if (j.once) { s.after(j.ms, j.run) } else { s.every(j.ms, j.run) }
         }
         s.log = this.log
+        val a = this.protection
+        if (a != null) {
+            val router = this.router
+            s.handle = { req -> defended(a, router, req) }
+        }
         val pages = this.live
         pages.host = s
         s.onOpen = { fd: Int, req: Request -> pages.opened(fd, req.queryOr("s")) }
@@ -276,7 +304,64 @@ public func app(title: String = "kealeb"): App {
     val assets: List<Asset> = []
     val jobs: List<Job> = []
     return App(Router(), title, "", "/kealeb/kealeb.css", true, hub(),
-               Chrome(title, "/kealeb/kealeb.css", head), assets, jobs)
+               Chrome(title, "/kealeb/kealeb.css", head, null), assets, jobs, null)
+}
+
+/// Put the CSRF token into every form on a page.
+///
+/// A walk over the tree rather than something the program writes, because a
+/// token you have to remember is a token somebody forgets on the one form that
+/// mattered. Only the methods that change something get one: a `GET` form
+/// would carry it into the query string, where it does not belong and where it
+/// ends up in a log.
+package func guarded(chrome: Chrome, req: Request, var tree: Node): Node {
+    val a = chrome.guard
+    if (a == null) { return tree }
+    stampForms(tree, a.csrfToken(req))
+    return tree
+}
+
+proc stampForms(var node: Node, token: String) {
+    if (node.tag == "form") {
+        val how = node.attrOf("method").toLower()
+        if (not ((how == "") or (how == "get"))) {
+            node.kids.insert(0, el("input").attr("type", "hidden")
+                                           .attr("name", csrfField).attr("value", token))
+        }
+    }
+    for (k in node.kids) { stampForms(k, token) }
+}
+
+/// The headers a response should carry whatever else it says.
+///
+/// Each one stops a browser being helpful in a way nobody asked for: guessing
+/// a media type, putting the page in somebody else's frame, sending the full
+/// URL to a third party, or running a script from anywhere but here. The
+/// content policy is strict enough to be worth having — `default-src 'self'`,
+/// no inline script — which is why the live client's session id is an
+/// attribute rather than the `<script>` tag it used to be.
+package func hardened(res: Response): Response {
+    // One statement per header rather than a chain: Keal ends a statement at a
+    // newline when the previous token could end one, so a leading `.` on the
+    // next line is a new statement and not a continuation.
+    res.with("x-content-type-options", "nosniff")
+    res.with("referrer-policy", "same-origin")
+    res.with("x-frame-options", "DENY")
+    res.with("content-security-policy",
+             "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+    return res
+}
+
+/// Everything `secure` installs, on the way in and on the way out.
+package func defended(a: Auth, router: Router, req: Request): Response {
+    val changes = ((req.method == "POST") or (req.method == "PUT")) or
+                  ((req.method == "PATCH") or (req.method == "DELETE"))
+    if (changes and (not a.csrfOk(req))) {
+        // Deliberately not specific. A page that legitimately posts here has
+        // the token; anything that does not, learns nothing from the answer.
+        return notFound("This request did not come from this site").status(403)
+    }
+    return hardened(dispatch(router, req))
 }
 
 /// Answer a browser asking to turn this connection into a WebSocket.
@@ -294,6 +379,18 @@ public func upgradeToSocket(req: Request): Response {
     val key = req.headerOr("sec-websocket-key", "")
     if (key.isEmpty()) {
         return badRequest("no Sec-WebSocket-Key")
+    }
+    // A browser always sends `Origin` on a WebSocket, and a page on another
+    // site sends its own — which is the cross-site request the same-origin
+    // policy does not cover for sockets. Something with no `Origin` at all is
+    // not a browser, and refusing it would refuse every test and every tool.
+    val origin = req.headerOr("origin", "")
+    if (not origin.isEmpty()) {
+        val host = req.headerOr("host", "")
+        val from = after(origin, "//")
+        if (from != host) {
+            return notFound("A socket from ${origin} is not one this site opened").status(403)
+        }
     }
     val headers: Map<String, String> = {}
     headers.set("upgrade", "websocket")

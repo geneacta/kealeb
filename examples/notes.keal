@@ -100,7 +100,10 @@ proc main() {
     // costs a query and no bytes.
     site.every(1000, { -> site.live.refreshAll() })
 
-    site.run(8080)
+    // The port is an argument so a test can ask for 0 and be told which one it
+    // got. Hard-coding it makes the example unrunnable while anything else
+    // holds the port — including a previous run of itself.
+    site.run(args().size > 0 ? (args()[0].toInt() ?: 8080) : 8080)
 }
 
 main()

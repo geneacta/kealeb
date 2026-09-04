@@ -1,0 +1,319 @@
+/// Signing in, staying signed in, and not being tricked into acting.
+///
+/// Four ideas and no fifth: a **password** you can store, a **session** that is
+/// a signed cookie and nothing on the server, a **guard** that is an ordinary
+/// function wrapping a handler, and a **token** that makes a form only work
+/// when it came from your own page. There is no role hierarchy, no expression
+/// language, no filter chain and no annotations. A role is a string. A rule is
+/// a function.
+///
+/// The one thing to get right before anything else works: **the secret.**
+/// Everything here is a signature under one key, so a program that hard-codes
+/// it in a public repository has no security at all, and a program that
+/// generates a new one every start signs everybody out on every deploy.
+/// `secretFromFile` is the small answer for a small deployment: a file with
+/// thirty-two random bytes, made once, that the process reads.
+
+import "./bytes.keal"
+import "./ffi.keal"
+import "./hash.keal"
+import "./http.keal"
+import "./text.keal"
+import "./ui.keal"
+
+/// Twenty-five thousand rounds of PBKDF2-HMAC-SHA256, and the number is
+/// measured rather than chosen: on the machine this was written on it costs
+/// about ninety-five milliseconds, which is the most a login can spend here.
+///
+/// **Why it is not the six hundred thousand OWASP asks for**, plainly: this
+/// server is one thread, so hashing a password blocks every other request for
+/// as long as it takes. At OWASP's number a login would hold the loop for two
+/// and a half seconds and ten of them would be a denial of service anybody
+/// could mount. So the round count is what a single-threaded server can pay,
+/// the login rate limiter below bounds how often it is paid, and the **pepper**
+/// is what carries the weight the rounds cannot: a stolen database is not
+/// enough to guess against, because the pepper is not in it.
+///
+/// Raise it if your server has time to spare. `hashPassword` writes the count
+/// into the stored hash, so raising it does not invalidate what is already
+/// stored — old passwords verify at their own count and are rewritten at the
+/// new one the next time somebody signs in.
+public val defaultRounds: Int = 25000
+
+/// The secrets. `signing` covers cookies and tokens; `pepper` goes into every
+/// password hash and must never be stored next to them.
+public class Keys(public val signing: String, public val pepper: String)
+
+/// What the application signs with, and how long a session lasts.
+public class Auth(
+    package val keys: Keys,
+    /// The cookie's name.
+    public var cookie: String,
+    /// How long a session lasts, in seconds. 0 means until the browser closes.
+    public var ttl: Int,
+    /// PBKDF2 rounds for a new password.
+    public var rounds: Int,
+    /// Send the cookie with `Secure`, so it never travels without TLS. Leave
+    /// it off only while developing on `http://127.0.0.1`.
+    public var secure: Bool,
+    /// Where `requireUser` sends somebody who is not signed in. Empty answers
+    /// 401 instead of redirecting, which is what an API wants.
+    public var signInPath: String,
+    package var attempts: Map<String, Int>,
+    package var windowStart: Int
+) {
+    // ------------------------------------------------------------ passwords
+
+    /// Hash a password for storage.
+    ///
+    /// The answer holds everything needed to check it later except the
+    /// pepper: the algorithm, the round count, and a fresh sixteen-byte salt.
+    /// Storing the round count is what lets it be raised later without
+    /// invalidating anything.
+    ///
+    ///     pbkdf2-sha256$25000$<salt>$<hash>
+    public func hashPassword(password: String): String {
+        val salt = randomBytes(16)
+        val digest = pbkdf2(this.keys.pepper + password, salt, this.rounds)
+        return ["pbkdf2-sha256", "${this.rounds}", base64url(salt), base64url(digest)].join("$")
+    }
+
+    /// Is this the password that was hashed?
+    ///
+    /// A stored value that is not one of ours answers false rather than
+    /// throwing: a row somebody hand-edited should fail to sign in, not take
+    /// the server down.
+    public func checkPassword(password: String, stored: String): Bool {
+        val parts = stored.split("$")
+        if (parts.size != 4) { return false }
+        if (parts[0] != "pbkdf2-sha256") { return false }
+        val rounds = parts[1].toInt() ?: 0
+        if ((rounds < 1) or (rounds > 5000000)) { return false }
+        val salt = unbase64url(parts[2])
+        val want = unbase64url(parts[3])
+        if ((salt == null) or (want == null)) { return false }
+        val got = pbkdf2(this.keys.pepper + password, salt, rounds)
+        return sameSecret(got, want)
+    }
+
+    /// Should this stored hash be written again? True when it was made with a
+    /// different round count from the one in force — which is how a work
+    /// factor is raised without asking anybody to change their password.
+    public func needsRehash(stored: String): Bool {
+        val parts = stored.split("$")
+        if (parts.size != 4) { return true }
+        return (parts[1].toInt() ?: 0) != this.rounds
+    }
+
+    // ------------------------------------------------------------- signing
+
+    /// `message.signature`, where the signature is over the message and the
+    /// key. Anybody can read the message; nobody can change it.
+    public func sign(message: String): String {
+        return base64url(bufOf(message)) + "." + base64url(signText(this.keys.signing, message))
+    }
+
+    /// The message back, or `null` when the signature is not ours.
+    public func unsign(token: String): String? {
+        val cut = cutOn(token, ".")
+        if (cut == null) { return null }
+        val body = unbase64url(cut.first)
+        if (body == null) { return null }
+        val given = unbase64url(cut.second)
+        if (given == null) { return null }
+        val message = body.all()
+        if (not sameSecret(signText(this.keys.signing, message), given)) { return null }
+        return message
+    }
+
+    // ------------------------------------------------------------ sessions
+
+    /// Who this request is, or `null`.
+    ///
+    /// The whole session is the cookie: a name and the second it was issued,
+    /// signed. There is no table, so nothing expires on the server and nothing
+    /// grows — and signing out is deleting a cookie, which means a stolen
+    /// cookie stays good until it expires. That is the trade a stateless
+    /// session makes, and `ttl` is the dial on it.
+    public func userOf(req: Request): String? {
+        val raw = req.cookie(this.cookie)
+        if (raw == null) { return null }
+        val message = this.unsign(raw)
+        if (message == null) { return null }
+        val cut = cutOn(message, "|")
+        if (cut == null) { return null }
+        val issued = cut.second.toInt() ?: 0
+        if (this.ttl > 0) {
+            val age = epochS() - issued
+            if ((age < 0) or (age > this.ttl)) { return null }
+        }
+        if (cut.first.isEmpty()) { return null }
+        return cut.first
+    }
+
+    /// Is anybody signed in?
+    public func signedIn(req: Request): Bool { return this.userOf(req) != null }
+
+    /// Put the session on a response.
+    public func signIn(res: Response, user: String): Response {
+        val token = this.sign("${user}|${epochS()}")
+        return res.cookie(this.cookie, token, this.ttl, "/", true, "Lax")
+    }
+
+    /// Take it off. `Max-Age=0` is how a cookie is deleted.
+    public func signOut(res: Response): Response {
+        return res.cookie(this.cookie, "", 0, "/", true, "Lax")
+    }
+
+    // ---------------------------------------------------------------- CSRF
+
+    /// The token for this request's session.
+    ///
+    /// It is derived from the session rather than stored, so it needs no state
+    /// and cannot get out of step. A visitor with no session gets a token tied
+    /// to nothing, which is what a sign-in form needs — the form must work
+    /// before anybody is signed in.
+    public func csrfToken(req: Request): String {
+        val who = this.userOf(req) ?: "-"
+        return base64url(signText(this.keys.signing, "csrf|" + who))
+    }
+
+    /// Is the token on this request the one it should carry?
+    public func csrfOk(req: Request): Bool {
+        val want = this.csrfToken(req)
+        val given = req.form().get(csrfField) ?: req.headerOr("x-csrf-token", "")
+        return sameSecretText(given, want)
+    }
+
+    /// The hidden input that carries it. `App.secure` puts one of these into
+    /// every form on every page, so a program that renders forms the ordinary
+    /// way never writes this.
+    public func csrfInput(req: Request): Node {
+        return el("input").attr("type", "hidden").attr("name", csrfField).attr("value", this.csrfToken(req))
+    }
+
+    // ------------------------------------------------------------ throttle
+
+    /// May this key try again?
+    ///
+    /// A fixed window rather than a leaky bucket: sixty seconds of attempts
+    /// per key, then a minute of no. It is coarse, it is four lines, and the
+    /// thing it must stop — a script trying ten thousand passwords, each of
+    /// which costs this single-threaded server ninety-five milliseconds — it
+    /// stops. Call it with the account name, or the peer, or both.
+    public func mayTry(key: String, limit: Int = 10): Bool {
+        val now = epochS()
+        if ((now - this.windowStart) >= 60) {
+            this.attempts.clear()
+            this.windowStart = now
+        }
+        val so_far = this.attempts.get(key) ?: 0
+        if (so_far >= limit) { return false }
+        this.attempts.set(key, so_far + 1)
+        return true
+    }
+
+    /// Forget the count for a key — what a successful sign-in does, so one
+    /// person's typo does not lock them out for the minute after they got it
+    /// right.
+    public proc succeeded(key: String) { this.attempts.remove(key) }
+}
+
+/// The name of the hidden field, and of the header an API may send instead.
+public val csrfField: String = "_kb_csrf"
+
+/// An `Auth` over a secret you supply.
+///
+/// The pepper is derived from the signing key rather than asked for
+/// separately, because two secrets to configure is how one of them ends up
+/// being `"changeme"`. They are different values — a signature is not a
+/// password hash — but there is one thing to keep safe.
+public func auth(secret: String): Auth {
+    if (secret.length < 16) {
+        panic("kealeb: the signing secret is ${secret.length} characters; it must be at least 16, " +
+              "and should be random rather than chosen")
+    }
+    val pepper = base64url(signText(secret, "kealeb/pepper/v1"))
+    val attempts: Map<String, Int> = {}
+    return Auth(Keys(secret, pepper), "kb_session", 7 * 24 * 3600, defaultRounds,
+                true, "/sign-in", attempts, epochS())
+}
+
+/// The secret, from a file, made once if it is not there.
+///
+/// This is the small answer for a small deployment. The file must be outside
+/// whatever is served and outside version control; put it beside the database,
+/// not beside the source. Answers the secret, and says on standard output when
+/// it had to make one, because a secret that appeared silently is one nobody
+/// remembers to back up.
+public func secretFromFile(path: String): String {
+    val had = readFile(path)
+    if (had != null) {
+        val trimmed = had.trim()
+        if (trimmed.length >= 16) { return trimmed }
+        println("kealeb: ${path} does not hold a usable secret; making a new one")
+    }
+    val made = base64url(randomBytes(32))
+    if (not writeFile(path, made + "\n")) {
+        panic("kealeb: could not write a secret to ${path}")
+    }
+    println("kealeb: wrote a new signing secret to ${path} — back it up, and keep it out of git")
+    return made
+}
+
+// ---------------------------------------------------------------- guards
+
+/// A handler only signed-in visitors reach.
+///
+/// Somebody who is not goes to `signInPath` with `?next=` naming where they
+/// were headed, or gets a 401 when `signInPath` is empty — which is what an
+/// API wants and a browser does not.
+public func requireUser(a: Auth, handler: (Request) -> Response): (Request) -> Response {
+    return { req ->
+        if (a.signedIn(req)) {
+            handler(req)
+        } else {
+            refuse(a, req)
+        }
+    }
+}
+
+/// A handler only some signed-in visitors reach. `allow` is given the user's
+/// name and answers whether they may — so a role is whatever your program says
+/// it is, looked up wherever your program keeps it.
+///
+///     site.get("/admin", requireWhen(a, { who -> isAdmin(db, who) }, { req -> … }))
+public func requireWhen(a: Auth, allow: (String) -> Bool,
+                        handler: (Request) -> Response): (Request) -> Response {
+    return { req ->
+        val who = a.userOf(req)
+        if (who == null) {
+            refuse(a, req)
+        } else if (allow(who)) {
+            handler(req)
+        } else {
+            notFound("Not yours to see").status(403)
+        }
+    }
+}
+
+func refuse(a: Auth, req: Request): Response {
+    if (a.signInPath.isEmpty()) {
+        return notFound("Sign in first").status(401).with("www-authenticate", "Cookie")
+    }
+    return redirect("${a.signInPath}?next=${percentEncode(req.target)}", 303)
+}
+
+/// Where a sign-in page should send somebody afterwards: what they asked for,
+/// if it was a path on this site, and `/` otherwise.
+///
+/// The check is the point. `?next=` is a value a stranger controls, and a
+/// redirect that follows it anywhere is how a phishing link borrows your
+/// domain. Anything that is not a single-slash-rooted path is refused.
+public func nextAfter(req: Request, fallback: String = "/"): String {
+    val want = req.queryOr("next", "")
+    if (not want.startsWith("/")) { return fallback }
+    if (want.startsWith("//")) { return fallback }
+    if (want.contains("\\")) { return fallback }
+    return want
+}

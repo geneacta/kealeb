@@ -265,10 +265,9 @@ proc testLive() {
          "[[\"x\",\"\",\"2\"],[\"x\",\"\",\"1\"]]", "removals count down")
 
     val page = liveDoc("T", column([h1("x")]), "abc123")
-    ok(page.contains("<div id=\"kb-root\" class=\"kb-page\"><div"),
-       "the mount point holds the tree and no whitespace")
-    ok(page.contains("</div>\n<script>"), "and nothing after it either")
-    ok(page.contains("window.KB_SESSION=\"abc123\""), "and names the session")
+    ok(page.contains("data-kb-session=\"abc123\"><div"),
+       "the mount point names the session and holds the tree, with no whitespace")
+    ok(not page.contains("<script>window"), "and there is no inline script to make a content policy excuse for")
     ok(page.contains("/kealeb/kealeb.js"), "and loads the client")
 
     same(acceptKey("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",

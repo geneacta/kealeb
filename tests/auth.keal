@@ -1,0 +1,261 @@
+/// Signing in, staying signed in, and being refused.
+///
+/// The rounds are turned down to a thousand for everything except the one
+/// check that the default is what it claims: at twenty-five thousand each
+/// hash costs about ninety-five milliseconds, and a test suite that spends
+/// twenty seconds proving arithmetic is a test suite people stop running.
+
+import "../kealeb.keal"
+import "../src/auth.keal"
+
+var checks = 0
+
+proc ok(condition: Bool, what: String) {
+    checks = checks + 1
+    assert(condition, what)
+}
+
+proc same(got: String, want: String, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected `${want}`, got `${got}`")
+}
+
+proc sameInt(got: Int, want: Int, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected ${want}, got ${got}")
+}
+
+func quick(): Auth {
+    val a = auth("a-secret-that-is-long-enough")
+    a.rounds = 1000
+    a.secure = false
+    return a
+}
+
+/// A request with headers, built the way one arrives.
+func asked(method: String, target: String, headers: String): Request {
+    var head = "${method} ${target} HTTP/1.1\r\nHost: h"
+    if (not headers.isEmpty()) { head = head + "\r\n" + headers }
+    val req = parseHead(head)
+    if (req == null) { panic("the test built a request that does not parse") }
+    return req
+}
+
+// ------------------------------------------------------------- passwords
+
+proc testPasswords() {
+    val a = quick()
+    val stored = a.hashPassword("correct horse battery staple")
+    ok(stored.startsWith(["pbkdf2-sha256", "1000", ""].join("$")),
+       "the algorithm and the count are in the stored value")
+    sameInt(stored.split("$").size, 4, "four fields")
+    ok(a.checkPassword("correct horse battery staple", stored), "the right password verifies")
+    ok(not a.checkPassword("Correct horse battery staple", stored), "and a near miss does not")
+    ok(not a.checkPassword("", stored), "nor an empty one")
+
+    // The salt is fresh every time, so the same password stores differently twice.
+    ok(a.hashPassword("x") != a.hashPassword("x"), "the same password hashes differently twice")
+    ok(a.checkPassword("x", a.hashPassword("x")), "and both still verify")
+
+    // A pepper the attacker does not have: the same password under a
+    // different secret does not verify. This is what carries the weight the
+    // round count cannot.
+    val other = auth("a-different-secret-entirely")
+    other.rounds = 1000
+    ok(not other.checkPassword("correct horse battery staple", stored),
+       "a stolen hash is useless without the pepper")
+
+    ok(not a.checkPassword("x", "nonsense"), "a stored value that is not ours fails rather than throws")
+    // Built with `join` rather than written with a `$` in them: a `$` in a
+    // Keal string starts an interpolation, `${name}` and bare `$name` alike,
+    // so `"...$AAAA"` is a variable that does not exist rather than four
+    // letters. It is the reason `hashPassword` builds its own format the same
+    // way.
+    ok(not a.checkPassword("x", ["pbkdf2-sha256", "1000", "!!!", "!!!"].join("$")),
+       "and so does one with unreadable fields")
+    ok(not a.checkPassword("x", ["pbkdf2-sha256", "0", "AAAA", "AAAA"].join("$")),
+       "and one claiming no rounds at all")
+
+    ok(not a.needsRehash(stored), "a hash at the current count is left alone")
+    a.rounds = 2000
+    ok(a.needsRehash(stored), "and one at an older count is not")
+    ok(a.checkPassword("correct horse battery staple", stored),
+       "but it still verifies, at the count it was made with")
+
+    sameInt(defaultRounds, 25000, "the default round count is the measured one")
+}
+
+// -------------------------------------------------------------- signing
+
+proc testSigning() {
+    val a = quick()
+    val token = a.sign("hello|123")
+    same(a.unsign(token) ?: "", "hello|123", "a signed message comes back")
+    ok(a.unsign(token + "x") == null, "a token with one more character does not")
+    ok(a.unsign("garbage") == null, "nor does something that is not a token")
+    ok(a.unsign("") == null, "nor nothing")
+
+    val elsewhere = auth("a-different-secret-entirely")
+    ok(elsewhere.unsign(token) == null, "and a signature from another key is refused")
+}
+
+// ------------------------------------------------------------- sessions
+
+proc testSessions() {
+    val a = quick()
+    val res = a.signIn(text("in"), "ada")
+    val setCookie = res.setCookies.isEmpty() ? "" : res.setCookies[0]
+    ok(setCookie.startsWith("kb_session="), "signing in sets the session cookie")
+    ok(setCookie.contains("HttpOnly"), "which no script can read")
+    ok(setCookie.contains("SameSite=Lax"), "and which does not travel cross-site")
+
+    val token = before(after(setCookie, "kb_session="), ";")
+    val signed = asked("GET", "/", "Cookie: kb_session=${percentDecode(token)}")
+    same(a.userOf(signed) ?: "", "ada", "and the next request knows who it is")
+    ok(a.signedIn(signed), "which is what signedIn answers")
+
+    ok(a.userOf(asked("GET", "/", "")) == null, "a request with no cookie is nobody")
+    ok(a.userOf(asked("GET", "/", "Cookie: kb_session=forged")) == null, "and a forged one is nobody")
+
+    // Expiry is on the signed value, so a cookie the browser kept past its
+    // welcome is still refused.
+    val old = a.sign("ada|${epochS() - 100000}")
+    a.ttl = 60
+    ok(a.userOf(asked("GET", "/", "Cookie: kb_session=${old}")) == null, "an expired session is nobody")
+    a.ttl = 0
+    ok(a.userOf(asked("GET", "/", "Cookie: kb_session=${old}")) != null,
+       "and a ttl of zero means the browser decides, not us")
+
+    val out = a.signOut(text("bye"))
+    ok(out.setCookies[0].contains("Max-Age=0"), "signing out deletes the cookie")
+}
+
+// ----------------------------------------------------------------- CSRF
+
+proc testCsrf() {
+    val a = quick()
+    val nobody = asked("GET", "/", "")
+    val token = a.csrfToken(nobody)
+    ok(not token.isEmpty(), "a visitor with no session still gets a token")
+    same(a.csrfToken(nobody), token, "and the same one every time, since it is derived")
+
+    val ada = asked("GET", "/", "Cookie: kb_session=${a.sign("ada|${epochS()}")}")
+    ok(a.csrfToken(ada) != token, "somebody signed in gets a different one")
+
+    val posted = asked("POST", "/", "Content-Type: application/x-www-form-urlencoded")
+    posted.body = bufOf("${csrfField}=${percentEncode(token)}&x=1")
+    ok(a.csrfOk(posted), "a form carrying the token is accepted")
+
+    val bare = asked("POST", "/", "Content-Type: application/x-www-form-urlencoded")
+    bare.body = bufOf("x=1")
+    ok(not a.csrfOk(bare), "one carrying none is not")
+
+    val wrong = asked("POST", "/", "Content-Type: application/x-www-form-urlencoded")
+    wrong.body = bufOf("${csrfField}=somebodyelses&x=1")
+    ok(not a.csrfOk(wrong), "and one carrying the wrong one is not")
+
+    val header = asked("POST", "/", "X-CSRF-Token: ${token}")
+    ok(a.csrfOk(header), "an API may send it as a header instead")
+
+    ok(render(a.csrfInput(nobody)).contains("type=\"hidden\""), "the field is hidden")
+    ok(render(a.csrfInput(nobody)).contains(csrfField), "and named")
+}
+
+// --------------------------------------------------------------- guards
+
+proc testGuards() {
+    val a = quick()
+    val inside = requireUser(a, { req -> text("secret") })
+
+    val out = inside(asked("GET", "/admin", ""))
+    sameInt(out.code, 303, "a stranger is redirected")
+    ok((out.headers.get("location") ?: "").contains("/sign-in"), "to the sign-in page")
+    ok((out.headers.get("location") ?: "").contains("next="), "carrying where they were going")
+
+    val ada = asked("GET", "/admin", "Cookie: kb_session=${a.sign("ada|${epochS()}")}")
+    same(inside(ada).text(), "secret", "and somebody signed in is let through")
+
+    a.signInPath = ""
+    sameInt(inside(asked("GET", "/admin", "")).code, 401, "with no sign-in page it is a 401")
+
+    val a2 = quick()
+    val admins = requireWhen(a2, { who -> who == "root" }, { req -> text("console") })
+    sameInt(admins(asked("GET", "/x", "")).code, 303, "a stranger is still redirected")
+    sameInt(admins(asked("GET", "/x", "Cookie: kb_session=${a2.sign("ada|${epochS()}")}")).code, 403,
+            "somebody signed in but not allowed gets 403, not 404")
+    same(admins(asked("GET", "/x", "Cookie: kb_session=${a2.sign("root|${epochS()}")}")).text(),
+         "console", "and the one who may, may")
+}
+
+// -------------------------------------------------------- the open redirect
+
+proc testNextAfter() {
+    same(nextAfter(asked("GET", "/sign-in?next=%2Fadmin", "")), "/admin", "a path on this site is kept")
+    same(nextAfter(asked("GET", "/sign-in", "")), "/", "no next at all is the fallback")
+    same(nextAfter(asked("GET", "/sign-in?next=https%3A%2F%2Fevil.example%2Fx", "")), "/",
+         "an absolute URL is refused")
+    same(nextAfter(asked("GET", "/sign-in?next=%2F%2Fevil.example%2Fx", "")), "/",
+         "and so is a protocol-relative one, which is the one people forget")
+    same(nextAfter(asked("GET", "/sign-in?next=%2Fa%5Cb", "")), "/", "and one with a backslash")
+}
+
+// ------------------------------------------------------------- throttling
+
+proc testThrottle() {
+    val a = quick()
+    var allowed = 0
+    for (i in 0..20) {
+        if (a.mayTry("ada", 10)) { allowed = allowed + 1 }
+    }
+    sameInt(allowed, 10, "ten tries and no more")
+    ok(not a.mayTry("ada", 10), "the eleventh is refused")
+    ok(a.mayTry("grace", 10), "and somebody else is unaffected")
+    a.succeeded("ada")
+    ok(a.mayTry("ada", 10), "a success forgets the count")
+}
+
+// ------------------------------------------------- everything, through an app
+
+proc testInstalled() {
+    val a = quick()
+    val site = app("guarded")
+    site.log = false
+    site.secure(a)
+    site.page("/", { req -> column([
+        el("form").attr("method", "post").attr("action", "/save").add(submit("Save")),
+        el("form").add(el("input").attr("name", "q"))
+    ])})
+    site.post("/save", { req -> text("saved") })
+    val s = site.serverOn(0)
+
+    val page = s.handle(asked("GET", "/", ""))
+    sameInt(page.code, 200, "the page renders")
+    ok(page.text().contains(csrfField), "and the framework put a token in the form")
+    sameInt(page.text().split(csrfField).size - 1, 1,
+            "in the one that posts, and not in the one that gets")
+    same(page.headers.get("x-content-type-options") ?: "", "nosniff", "the headers are there")
+    ok((page.headers.get("content-security-policy") ?: "").contains("default-src 'self'"),
+       "including a content policy with no room for inline script")
+    ok(not page.text().contains("<script>window"), "which the live client no longer needs")
+
+    val blind = asked("POST", "/save", "Content-Type: application/x-www-form-urlencoded")
+    blind.body = bufOf("x=1")
+    sameInt(s.handle(blind).code, 403, "a post with no token is refused")
+
+    val token = a.csrfToken(asked("GET", "/", ""))
+    val proper = asked("POST", "/save", "Content-Type: application/x-www-form-urlencoded")
+    proper.body = bufOf("${csrfField}=${percentEncode(token)}")
+    same(s.handle(proper).text(), "saved", "and one with it is not")
+
+    sameInt(s.handle(asked("GET", "/nowhere", "")).code, 404, "a GET is not asked for a token")
+}
+
+testPasswords()
+testSigning()
+testSessions()
+testCsrf()
+testGuards()
+testNextAfter()
+testThrottle()
+testInstalled()
+println("${checks} checks passed")

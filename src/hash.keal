@@ -1,0 +1,360 @@
+/// SHA-256, HMAC and PBKDF2 — the three things a password and a signed cookie
+/// need, written in Keal.
+///
+/// **Read this paragraph before using any of it.** This is hand-written
+/// cryptographic code. It has not been audited by anybody, and the only thing
+/// standing behind it is that every function here is checked against the
+/// published vectors for it — NIST's for SHA-256, RFC 4231's for HMAC, RFC
+/// 7914's for PBKDF2 — in `tests/hash.keal`, on every build. That is enough to
+/// say the algorithms are the algorithms. It is not enough to say the
+/// implementation is free of side channels a determined attacker with a
+/// stopwatch could use, and pretending otherwise would be the kind of claim
+/// this repository does not make.
+///
+/// What it does have going for it: SHA-256 has no data-dependent branches and
+/// no table lookups, so the obvious timing channel is not there by
+/// construction rather than by care. Comparisons of secrets go through
+/// `sameSecret`, which reads every byte whatever it finds.
+///
+/// The alternative was linking OpenSSL. That is one more thing to install, one
+/// more version to track, and a second answer to "what does this program
+/// depend on" — and the whole framework is here because that answer should be
+/// short. The trade is stated rather than hidden: fewer dependencies, more
+/// hand-written cryptography, and vectors on every build to hold it.
+
+import "./bytes.keal"
+
+// ---------------------------------------------------------------- SHA-256
+
+val k256: List<Int> = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+val mask32: Int = 0xFFFF_FFFF
+
+func rotr32(v: Int, n: Int): Int {
+    val x = v band mask32
+    return ((x ushr n) bor (x shl (32 - n))) band mask32
+}
+
+/// A digest in progress: the eight words of state, and the sixty-four-word
+/// schedule one compression needs.
+///
+/// It exists so that the schedule is allocated once per digest rather than
+/// once per block, and so that HMAC can start a hash from a state it computed
+/// earlier. Both matter here for one reason: PBKDF2 runs this tens of
+/// thousands of times per login, and what it costs is what decides how many
+/// rounds a login can afford.
+class Digest(package var h: List<Int>, package var w: List<Int>)
+
+func freshState(): List<Int> {
+    return [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+}
+
+func newDigest(): Digest {
+    val w: List<Int> = []
+    for (i in 0..64) { w.add(0) }
+    return Digest(freshState(), w)
+}
+
+proc setState(var d: Digest, state: List<Int>) {
+    for (i in 0..8) { d.h.set(i, state[i]) }
+}
+
+func stateOf(d: Digest): List<Int> {
+    val out: List<Int> = []
+    for (i in 0..8) { out.add(d.h[i]) }
+    return out
+}
+
+/// One sixty-four-byte block, from `m` at `off`.
+proc compress(var d: Digest, m: Buf, off: Int) {
+    val w = d.w
+    for (i in 0..16) {
+        val o = off + i * 4
+        w.set(i, (((m.at(o) shl 24) bor (m.at(o + 1) shl 16)) bor (m.at(o + 2) shl 8)) bor m.at(o + 3))
+    }
+    for (i in 16..64) {
+        val x = w[i - 15]
+        val y = w[i - 2]
+        val s0 = (rotr32(x, 7) bxor rotr32(x, 18)) bxor (x ushr 3)
+        val s1 = (rotr32(y, 17) bxor rotr32(y, 19)) bxor (y ushr 10)
+        w.set(i, (((w[i - 16] + s0) + w[i - 7]) + s1) band mask32)
+    }
+
+    var a = d.h[0]
+    var b = d.h[1]
+    var c = d.h[2]
+    var dd = d.h[3]
+    var e = d.h[4]
+    var f = d.h[5]
+    var g = d.h[6]
+    var h = d.h[7]
+
+    for (i in 0..64) {
+        val s1 = (rotr32(e, 6) bxor rotr32(e, 11)) bxor rotr32(e, 25)
+        val ch = (e band f) bxor ((bnot e) band g)
+        val t1 = ((((h + s1) + ch) + k256[i]) + w[i]) band mask32
+        val s0 = (rotr32(a, 2) bxor rotr32(a, 13)) bxor rotr32(a, 22)
+        val maj = ((a band b) bxor (a band c)) bxor (b band c)
+        val t2 = (s0 + maj) band mask32
+        h = g
+        g = f
+        f = e
+        e = (dd + t1) band mask32
+        dd = c
+        c = b
+        b = a
+        a = (t1 + t2) band mask32
+    }
+
+    d.h.set(0, (d.h[0] + a) band mask32)
+    d.h.set(1, (d.h[1] + b) band mask32)
+    d.h.set(2, (d.h[2] + c) band mask32)
+    d.h.set(3, (d.h[3] + dd) band mask32)
+    d.h.set(4, (d.h[4] + e) band mask32)
+    d.h.set(5, (d.h[5] + f) band mask32)
+    d.h.set(6, (d.h[6] + g) band mask32)
+    d.h.set(7, (d.h[7] + h) band mask32)
+}
+
+/// The state, as thirty-two bytes.
+proc emit(d: Digest, var out: Buf) {
+    out.clear()
+    for (i in 0..8) {
+        val v = d.h[i]
+        for (b in 0..4) { out.byte((v ushr ((3 - b) * 8)) band 0xFF) }
+    }
+}
+
+/// `msg`, padded as SHA-256 says — with `prefix` bytes counted as already
+/// hashed, which is how HMAC's inner block is accounted for when the hash
+/// starts from a state rather than from the beginning.
+func padFrom(msg: Buf, prefix: Int): Buf {
+    val out = buf(msg.len + 72)
+    out.join(msg, 0, msg.len)
+    out.byte(0x80)
+    while ((out.len % 64) != 56) { out.byte(0) }
+    val bits = (prefix + msg.len) * 8
+    for (i in 0..8) { out.byte((bits ushr ((7 - i) * 8)) band 0xFF) }
+    return out
+}
+
+/// The SHA-256 digest of a buffer, as thirty-two bytes.
+public func sha256(msg: Buf): Buf {
+    val d = newDigest()
+    val m = padFrom(msg, 0)
+    var at = 0
+    while (at < m.len) {
+        compress(d, m, at)
+        at = at + 64
+    }
+    val out = buf(32)
+    emit(d, out)
+    return out
+}
+
+// ------------------------------------------------------------------- HMAC
+
+val hmacBlock: Int = 64
+
+/// A key, with the two half-hashes it implies already computed.
+///
+/// HMAC is `H(opad || H(ipad || message))`, and both pads are a full block. So
+/// the first compression of each of those two hashes depends on the key and
+/// nothing else — and a loop that keeps the key and changes the message, which
+/// is exactly what PBKDF2 is, was computing both of them again on every single
+/// round. Holding them halves the work.
+public class Hmac(
+    package val innerState: List<Int>,
+    package val outerState: List<Int>,
+    package val d: Digest
+)
+
+/// Prepare a key.
+public func hmacKey(key: Buf): Hmac {
+    val k = buf(hmacBlock)
+    if (key.len > hmacBlock) {
+        val digest = sha256(key)
+        k.join(digest, 0, digest.len)
+    } else {
+        k.join(key, 0, key.len)
+    }
+    while (k.len < hmacBlock) { k.byte(0) }
+
+    val ipad = buf(hmacBlock)
+    val opad = buf(hmacBlock)
+    for (i in 0..hmacBlock) {
+        ipad.byte(k.at(i) bxor 0x36)
+        opad.byte(k.at(i) bxor 0x5c)
+    }
+
+    val d = newDigest()
+    compress(d, ipad, 0)
+    val inner = stateOf(d)
+    setState(d, freshState())
+    compress(d, opad, 0)
+    val outer = stateOf(d)
+    return Hmac(inner, outer, d)
+}
+
+/// The MAC of a message under a prepared key.
+public func hmacOf(mac: Hmac, msg: Buf): Buf {
+    val d = mac.d
+    val out = buf(32)
+
+    setState(d, mac.innerState)
+    val innerTail = padFrom(msg, hmacBlock)
+    var at = 0
+    while (at < innerTail.len) {
+        compress(d, innerTail, at)
+        at = at + 64
+    }
+    emit(d, out)
+
+    setState(d, mac.outerState)
+    val outerTail = padFrom(out, hmacBlock)
+    at = 0
+    while (at < outerTail.len) {
+        compress(d, outerTail, at)
+        at = at + 64
+    }
+    emit(d, out)
+    return out
+}
+
+/// HMAC-SHA256 in one call, as RFC 2104 states it. The same answer as
+/// preparing the key and using it once, which `tests/hash.keal` checks rather
+/// than assumes.
+public func hmacSha256(key: Buf, msg: Buf): Buf {
+    return hmacOf(hmacKey(key), msg)
+}
+
+/// The same, over text, which is what signing a cookie needs.
+public func signText(key: String, message: String): Buf {
+    return hmacSha256(bufOf(key), bufOf(message))
+}
+
+// ----------------------------------------------------------------- PBKDF2
+
+/// PBKDF2-HMAC-SHA256, thirty-two bytes out.
+///
+/// One derived block, because thirty-two bytes is exactly one and asking for
+/// more would be asking for a second pass nobody here needs. `rounds` is what
+/// makes it slow on purpose; `defaultRounds` in `auth.keal` says what this
+/// framework picks and how that number was arrived at.
+public func pbkdf2(password: String, salt: Buf, rounds: Int): Buf {
+    // The key is prepared once. That is the whole optimisation, and it is
+    // worth half the running time: without it, every round recomputes the two
+    // block-sized half-hashes that depend only on the password.
+    val mac = hmacKey(bufOf(password))
+
+    // U1 = HMAC(password, salt || INT_BE(1)) — the block index, and there is
+    // only ever one block, because thirty-two bytes is exactly one.
+    val first = buf(salt.len + 4)
+    first.join(salt, 0, salt.len)
+    first.byte(0)
+    first.byte(0)
+    first.byte(0)
+    first.byte(1)
+
+    var u = hmacOf(mac, first)
+    val out = buf(32)
+    out.join(u, 0, u.len)
+
+    var i = 1
+    val n = rounds < 1 ? 1 : rounds
+    while (i < n) {
+        u = hmacOf(mac, u)
+        for (b in 0..32) { out.setAt(b, out.at(b) bxor u.at(b)) }
+        i = i + 1
+    }
+    return out
+}
+
+// ----------------------------------------------------------- comparing
+
+/// Compare two buffers without telling anybody where they first differed.
+///
+/// The ordinary comparison stops at the first byte that does not match, and
+/// how long it took to stop is a measurement somebody can make. This reads
+/// every byte of both, always, and folds the differences together.
+public func sameSecret(a: Buf, b: Buf): Bool {
+    var diff = a.len bxor b.len
+    val n = a.len < b.len ? a.len : b.len
+    for (i in 0..n) { diff = diff bor (a.at(i) bxor b.at(i)) }
+    // A length mismatch has already put a bit in `diff`; the loop over the
+    // shorter length is there so the *time* does not depend on the contents.
+    return diff == 0
+}
+
+/// The same for text.
+public func sameSecretText(a: String, b: String): Bool {
+    return sameSecret(bufOf(a), bufOf(b))
+}
+
+// -------------------------------------------------------------- base64url
+
+val urlDigits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+/// Base64 with the URL alphabet and no padding — what goes in a cookie, where
+/// `+`, `/` and `=` each mean something to somebody.
+public func base64url(b: Buf): String {
+    val out: List<String> = []
+    var i = 0
+    while (i < b.len) {
+        val b0 = b.at(i)
+        val b1 = i + 1 < b.len ? b.at(i + 1) : 0
+        val b2 = i + 2 < b.len ? b.at(i + 2) : 0
+        val n = ((b0 shl 16) bor (b1 shl 8)) bor b2
+        out.add(urlDigits[(n shr 18) band 63])
+        out.add(urlDigits[(n shr 12) band 63])
+        if (i + 1 < b.len) { out.add(urlDigits[(n shr 6) band 63]) }
+        if (i + 2 < b.len) { out.add(urlDigits[n band 63]) }
+        i = i + 3
+    }
+    return out.join("")
+}
+
+/// Back again, or `null` when the text is not that.
+public func unbase64url(s: String): Buf? {
+    val out = buf(s.length)
+    var acc = 0
+    var bits = 0
+    for (c in s) {
+        val d = urlDigits.indexOf(c)
+        if (d < 0) { return null }
+        acc = (acc shl 6) bor d
+        bits = bits + 6
+        if (bits >= 8) {
+            bits = bits - 8
+            out.byte((acc shr bits) band 0xFF)
+        }
+    }
+    return out
+}
+
+/// Bytes nobody can guess, `n` of them. The source is the machine's, not a
+/// pseudo-random generator seeded from the clock.
+public func randomBytes(n: Int): Buf {
+    val out = buf(n + 8)
+    while (out.len < n) {
+        val v = secureRandom()
+        if (v < 0) { panic("this machine would not provide random bytes") }
+        for (i in 0..8) { out.byte((v ushr (i * 8)) band 0xFF) }
+    }
+    val exact = buf(n)
+    exact.join(out, 0, n)
+    return exact
+}

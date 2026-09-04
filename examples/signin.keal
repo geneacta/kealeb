@@ -1,0 +1,152 @@
+import "../kealeb.keal"
+import "../src/auth.keal"
+import "../src/sql.keal"
+
+/// Signing in: a password in a database, a session in a cookie, a page nobody
+/// else can see.
+///
+///     tools/build.sh examples/signin.keal -lsqlite3 && build/signin
+///
+/// Everything security-shaped here is four lines — `site.secure(a)`, one
+/// `requireUser`, one `hashPassword`, one `checkPassword` — and the rest is an
+/// ordinary application. The CSRF token in the two forms below was not written
+/// by anybody: `secure` walks each page and puts it there.
+///
+/// The secret is read from `signin.secret`, made on the first run. **Keep that
+/// file out of git and back it up**: it signs every session and peppers every
+/// password, so losing it signs everybody out and makes every stored hash
+/// unverifiable.
+
+val db = openDb("signin.db")
+val site = app("kealeb — sign in")
+
+proc userPage(var site: App, a: Auth, var db: Db) {
+    site.get("/private", requireUser(a, { req ->
+        val who = a.userOf(req) ?: "?"
+        html(doc("Private", column([
+            h1("Hello, ${who}"),
+            p("Only somebody signed in reaches this page. A stranger is sent to the sign-in form with `?next=/private`, and lands back here afterwards.").cls("kb-muted"),
+            el("form").attr("method", "post").attr("action", "/sign-out").add(submit("Sign out")),
+            link("/", "home")
+        ])))
+    }))
+}
+
+proc main() {
+    if (db == null) {
+        println("could not open signin.db")
+        exit(1)
+    }
+    if (db.migrate([
+        "create table person(name text primary key, secret text not null, made integer not null)"
+    ]) < 0) {
+        println("the schema could not be brought up to date: ${db.error()}")
+        exit(1)
+    }
+
+    val a = auth(secretFromFile("signin.secret"))
+    // Only while developing: the session cookie is sent without `Secure` so it
+    // survives plain http on localhost. In production this line goes.
+    a.secure = false
+    site.secure(a)
+
+    site.page("/", { req ->
+        val who = a.userOf(req)
+        column([
+            h1("kealeb — signing in"),
+            p("${db.value("select count(*) from person").int()} account(s) in signin.db.").cls("kb-muted"),
+            card([
+                who == null ? p("Nobody is signed in.") : p("Signed in as ${who}."),
+                row([link("/private", "a page for members"), link("/sign-in", "sign in"),
+                     link("/register", "make an account")])
+            ])
+        ])
+    })
+
+    // ------------------------------------------------------------ sign in
+
+    site.page("/sign-in", { req -> column([
+        h1("Sign in"),
+        shownWhen(req.queryOr("e") == "no", p("That name and password do not go together.").cls("kb-danger")),
+        shownWhen(req.queryOr("e") == "slow", p("Too many tries. Wait a minute.").cls("kb-danger")),
+        card([el("form").attr("method", "post").addAll([
+            column([
+                label("name"), el("input").cls("kb-input").attr("name", "name").attr("autocomplete", "username"),
+                label("password"), el("input").cls("kb-input").attr("type", "password").attr("name", "password").attr("autocomplete", "current-password"),
+                el("input").attr("type", "hidden").attr("name", "next").attr("value", nextAfter(req)),
+                row([submit("Sign in")])
+            ])
+        ])]),
+        link("/register", "or make an account")
+    ])}, "Sign in")
+
+    site.post("/sign-in", { req ->
+        val form = req.form()
+        val name = (form.get("name") ?: "").trim()
+        val password = form.get("password") ?: ""
+        val where = form.get("next") ?: "/"
+
+        // Both the name and the peer, so one account cannot be locked out from
+        // elsewhere and one machine cannot work through a list of names.
+        if (not (a.mayTry("name:" + name) and a.mayTry("from:" + req.peer))) {
+            redirect("/sign-in?e=slow", 303)
+        } else {
+            val row = db.one("select secret from person where name = ?", [vText(name)])
+            // The same work whether or not the account exists: verifying
+            // against a hash of nothing takes as long as verifying against a
+            // real one, so how long the answer took does not say whether the
+            // name is a name.
+            var stored = ""
+            if (row == null) { stored = a.hashPassword("no such person") } else { stored = row.text("secret") }
+            if ((row != null) and a.checkPassword(password, stored)) {
+                a.succeeded("name:" + name)
+                if (a.needsRehash(stored)) {
+                    db.run("update person set secret = ? where name = ?",
+                           [vText(a.hashPassword(password)), vText(name)])
+                }
+                a.signIn(redirect(where.startsWith("/") ? where : "/", 303), name)
+            } else {
+                redirect("/sign-in?e=no", 303)
+            }
+        }
+    })
+
+    site.post("/sign-out", { req -> a.signOut(redirect("/", 303)) })
+
+    // ------------------------------------------------------------ register
+
+    site.page("/register", { req -> column([
+        h1("Make an account"),
+        shownWhen(req.queryOr("e") == "taken", p("That name is taken.").cls("kb-danger")),
+        shownWhen(req.queryOr("e") == "short", p("Eight characters at least, please.").cls("kb-danger")),
+        card([el("form").attr("method", "post").add(column([
+            label("name"), el("input").cls("kb-input").attr("name", "name"),
+            label("password"), el("input").cls("kb-input").attr("type", "password").attr("name", "password").attr("autocomplete", "new-password"),
+            row([submit("Make it")])
+        ]))]),
+        link("/sign-in", "or sign in")
+    ])}, "Register")
+
+    site.post("/register", { req ->
+        val form = req.form()
+        val name = (form.get("name") ?: "").trim()
+        val password = form.get("password") ?: ""
+        if (name.isEmpty() or (password.length < 8)) {
+            redirect("/register?e=short", 303)
+        } else if (db.one("select name from person where name = ?", [vText(name)]) != null) {
+            redirect("/register?e=taken", 303)
+        } else {
+            db.run("insert into person(name, secret, made) values (?, ?, ?)",
+                   [vText(name), vText(a.hashPassword(password)), vInt(epochS())])
+            a.signIn(redirect("/private", 303), name)
+        }
+    })
+
+    userPage(site, a, db)
+    // The port is an argument so a test can ask for 0 and be told which one it
+    // got. Hard-coding it makes the example unrunnable while anything else
+    // holds the port — including a previous run of itself.
+    site.run(args().size > 0 ? (args()[0].toInt() ?: 8080) : 8080)
+}
+
+main()

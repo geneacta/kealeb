@@ -713,7 +713,151 @@ a database: stop it, start it again, the notes are there. It also shows the
 one thing a live page cannot work out for itself — `site.live.refreshAll()` in
 a timer, so a page learns about a change it did not cause.
 
-## 14. What the framework will not do
+## 14. Security
+
+Four ideas, and there is no fifth. A **password** you can store, a **session**
+that is a signed cookie and nothing on the server, a **guard** that is an
+ordinary function wrapping a handler, and a **token** that makes a form only
+work when it came from your own page.
+
+There is no role hierarchy, no expression language, no filter chain and no
+annotations. A role is a string. A rule is a function.
+
+```keal
+import "kealeb/src/auth.keal"
+
+val a = auth(secretFromFile("app.secret"))
+site.secure(a)
+```
+
+Those two lines switch on four things nobody should have to write:
+
+* every form on every page gets a hidden CSRF token, put there by the
+  framework walking the tree;
+* every `POST`, `PUT`, `PATCH` and `DELETE` is refused without it;
+* every response carries `nosniff`, `Referrer-Policy`, `X-Frame-Options` and a
+  content policy of `default-src 'self'` with no room for inline script;
+* a WebSocket upgrade whose `Origin` is another site is refused.
+
+There is nothing to configure because there is nothing there anybody should
+want to turn off. What is left to decide is what an application really has to:
+who may sign in, and what they may then do.
+
+### The secret
+
+Everything is a signature under one key, so a program that hard-codes it in a
+public repository has no security at all, and one that generates a new key at
+every start signs everybody out on every deploy.
+
+```keal
+val a = auth(secretFromFile("app.secret"))
+```
+
+Thirty-two random bytes, made on the first run, read on every one after.
+**Keep that file out of version control and back it up**: it signs every
+session and peppers every password, so losing it signs everybody out *and*
+makes every stored hash unverifiable.
+
+### Passwords
+
+```keal
+val stored = a.hashPassword(what)                 // pbkdf2-sha256$25000$…$…
+if (a.checkPassword(what, stored)) { … }
+if (a.needsRehash(stored)) { store(a.hashPassword(what)) }
+```
+
+PBKDF2-HMAC-SHA256, written in Keal in `src/hash.keal` and checked against the
+published vectors on every build. A fresh sixteen-byte salt per password, and
+the round count stored alongside — so raising it later does not invalidate
+anything, and `needsRehash` says when to write one again at the new count.
+
+**Why 25 000 rounds and not the 600 000 OWASP asks for**, since the difference
+matters and hiding it would be worse than having it: this server is one
+thread, so hashing blocks every other request for as long as it takes. 25 000
+costs about 95 ms here — measured, not guessed. At OWASP's number a login
+would hold the loop for two and a half seconds and ten of them would be a
+denial of service anybody could mount.
+
+Three things carry the weight that the round count does not:
+
+* **A pepper.** Every password is hashed with a secret that is not in the
+  database. A stolen database is not something you can guess against, whatever
+  the round count, unless the secret leaked too.
+* **A rate limit.** `a.mayTry(key)` allows ten attempts a minute per key. Call
+  it with the account name *and* the peer, so one account cannot be locked out
+  from elsewhere and one machine cannot work through a list of names.
+* **Saying so.** If your server has time to spare, `a.rounds = 100000` is one
+  line, and it costs what `tools/build.sh` will tell you it costs.
+
+### Sessions
+
+```keal
+a.signIn(redirect("/", 303), name)      // sets the cookie
+a.signOut(redirect("/", 303))           // deletes it
+a.userOf(req)                           // String?, or null
+a.signedIn(req)                         // Bool
+```
+
+The whole session is the cookie: a name and the second it was issued, signed.
+`HttpOnly`, `SameSite=Lax`, and `Secure` unless you turn it off for localhost.
+
+There is no table, so nothing expires on the server and nothing grows — and
+signing out deletes a cookie, which means a stolen cookie stays good until it
+expires. That is the trade a stateless session makes, stated rather than
+buried, and `a.ttl` is the dial on it (a week by default; 0 means until the
+browser closes).
+
+### Guards
+
+```keal
+site.get("/private", requireUser(a, { req -> … }))
+site.get("/admin", requireWhen(a, { who -> isAdmin(db, who) }, { req -> … }))
+```
+
+`requireUser` sends a stranger to `a.signInPath` with `?next=` naming where
+they were going, or answers 401 when `signInPath` is empty — which is what an
+API wants and a browser does not. `requireWhen` is given the user's name and
+answers whether they may; somebody signed in but not allowed gets **403**, not
+404.
+
+Reading `?next=` back is `nextAfter(req)`, and the checking is the point: a
+redirect that follows a value a stranger controls is how a phishing link
+borrows your domain. Anything that is not a single-slash-rooted path is
+refused, `//evil.example` included — that is the one people forget.
+
+### The token
+
+`site.secure(a)` puts a hidden field into every form built by `page` or
+`livePage` whose method changes something, and refuses every unsafe request
+without it. An API may send it as `X-CSRF-Token` instead.
+
+The token is derived from the session rather than stored, so it needs no state
+and cannot get out of step, and a visitor with no session still gets one —
+which the sign-in form needs, since it has to work before anybody is signed
+in.
+
+One gap to know about: a handler that builds its own document with `doc(...)`
+rather than through `page` is not walked, so add `a.csrfInput(req)` yourself.
+The pattern that avoids the question is POST-then-redirect, which you want
+anyway.
+
+### What this does not do
+
+* No OAuth, no SAML, no LDAP, no OpenID. A password and a cookie.
+* No permission model. `requireWhen` hands you a name and takes a `Bool`;
+  where roles live and what they mean is your program's business.
+* No TLS. Put it behind a reverse proxy — and until you do, `a.secure = false`
+  or the cookie will not be sent at all.
+* No account recovery, no email confirmation, no second factor.
+* **The cryptography is hand-written.** `src/hash.keal` says so at the top and
+  says why: the alternative was linking OpenSSL, which is one more thing to
+  install and a second answer to *what does this depend on*. Every function in
+  it is held to the vectors whoever specified it published — NIST's for
+  SHA-256, RFC 4231's for HMAC, RFC 7914's for PBKDF2 — on every build. That is
+  enough to say the algorithms are the algorithms. It is not an audit, and this
+  guide will not pretend it is one.
+
+## 15. What the framework will not do
 
 * It will not talk to any database but SQLite, and only when you ask for it
   with a second import and `-lsqlite3`.
@@ -746,4 +890,6 @@ a timer, so a page learns about a change it did not cause.
 | `src/css.keal` | stylesheets, written in Keal |
 | `src/sql.keal` | SQLite: bound values, rows, transactions, migrations |
 | `runtime/kb_sql.h` | the C for that, and the only thing that needs a library |
+| `src/hash.keal` | SHA-256, HMAC, PBKDF2 — with the warning that goes with them |
+| `src/auth.keal` | passwords, sessions, guards, the CSRF token |
 | `src/app.keal` | the front door everything above is reachable from |

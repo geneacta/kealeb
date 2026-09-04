@@ -315,10 +315,14 @@ public func liveDoc(title: String, tree: Node, sessionId: String,
     }
     if (not head.isEmpty()) { out.text(head + "\n") }
     out.text("</head>\n<body>\n")
-    out.text("<div id=\"kb-root\" class=\"kb-page\">")
+    // The session id is an attribute, not an inline `<script>`. It was one,
+    // and moving it is what lets a page carry `default-src 'self'` with no
+    // exception for inline script — a content policy with a hole in it for
+    // one line of our own is a policy that does not stop the line somebody
+    // else injects.
+    out.text("<div id=\"kb-root\" class=\"kb-page\" data-kb-session=\"${escapeAttr(sessionId)}\">")
     renderInto(tree, out)
     out.text("</div>\n")
-    out.text("<script>window.KB_SESSION=${quote(sessionId)}</script>\n")
     out.text("<script src=\"/kealeb/kealeb.js\"></script>\n")
     out.text("</body>\n</html>\n")
     return out.all()
@@ -337,6 +341,7 @@ public val clientScript: String = """
 (function () {
   var root = document.getElementById('kb-root');
   if (!root) return;
+  var session = root.getAttribute('data-kb-session') || '';
   var ws = null, tries = 0, badge = null, closed = false;
 
   function nodeAt(path) {
@@ -444,7 +449,7 @@ public val clientScript: String = """
 
   function connect() {
     var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    ws = new WebSocket(scheme + location.host + '/kealeb/live?s=' + encodeURIComponent(window.KB_SESSION));
+    ws = new WebSocket(scheme + location.host + '/kealeb/live?s=' + encodeURIComponent(session));
     ws.onopen = function () { tries = 0; offline(false); };
     ws.onmessage = function (e) {
       var msg = JSON.parse(e.data);

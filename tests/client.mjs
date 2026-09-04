@@ -208,16 +208,19 @@ async function main() {
   const port = await listeningPort(8000);
   const page = await (await fetch(`http://127.0.0.1:${port}/`)).text();
 
-  const session = /window\.KB_SESSION="([0-9a-f]+)"/.exec(page);
+  const session = /data-kb-session="([0-9a-f]+)"/.exec(page);
   ok(session !== null, 'the page names a session');
   if (!session) return;
 
-  const mount = /<div id="kb-root" class="kb-page">(.*)<\/div>\n<script>/s.exec(page);
+  const mount = /<div id="kb-root" class="kb-page" data-kb-session="[0-9a-f]+">(.*)<\/div>\n<script/s.exec(page);
   ok(mount !== null, 'the page has a mount point');
   if (!mount) return;
 
   const root = new DomNode(1, 'div');
   root.setAttribute('id', 'kb-root');
+  // The session id lives on the mount point rather than in an inline script,
+  // so the harness must put it where the client will look for it.
+  root.setAttribute('data-kb-session', session[1]);
   for (const c of parse(mount[1]).childNodes) root.appendChild(c);
 
   // The document and window the client script expects, and nothing more.
@@ -235,7 +238,7 @@ async function main() {
     },
     body: new DomNode(1, 'body'),
   };
-  const window = { KB_SESSION: session[1], addEventListener() {} };
+  const window = { addEventListener() {} };
   const location = { protocol: 'http:', host: `127.0.0.1:${port}`, reload() { fail.push('the client reloaded'); } };
 
   const source = clientSource();

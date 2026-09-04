@@ -733,7 +733,157 @@ aussi la seule chose qu'une page vivante ne peut pas deviner —
 `site.live.refreshAll()` dans un minuteur, pour qu'une page apprenne un
 changement qu'elle n'a pas causé.
 
-## 14. Ce que le cadriciel ne fera pas
+## 14. La sécurité
+
+Quatre idées, et il n'y en a pas de cinquième. Un **mot de passe** stockable,
+une **session** qui est un cookie signé et rien sur le serveur, une **garde**
+qui est une fonction ordinaire enveloppant un gestionnaire, et un **jeton** qui
+fait qu'un formulaire ne marche que s'il vient de votre page.
+
+Pas de hiérarchie de rôles, pas de langage d'expressions, pas de chaîne de
+filtres, pas d'annotations. Un rôle est une chaîne. Une règle est une fonction.
+
+```keal
+import "kealeb/src/auth.keal"
+
+val a = auth(secretFromFile("app.secret"))
+site.secure(a)
+```
+
+Ces deux lignes allument quatre choses que personne ne devrait avoir à écrire :
+
+* chaque formulaire de chaque page reçoit un jeton CSRF caché, posé par le
+  cadriciel en parcourant l'arbre ;
+* chaque `POST`, `PUT`, `PATCH` et `DELETE` est refusé sans lui ;
+* chaque réponse porte `nosniff`, `Referrer-Policy`, `X-Frame-Options` et une
+  politique de contenu `default-src 'self'` sans place pour du script inline ;
+* une bascule WebSocket dont l'`Origin` est un autre site est refusée.
+
+Il n'y a rien à configurer parce qu'il n'y a rien là-dedans que quelqu'un
+devrait vouloir éteindre. Ce qui reste à décider est ce qu'une application doit
+vraiment décider : qui peut se connecter, et ce qu'il peut faire ensuite.
+
+### Le secret
+
+Tout est une signature sous une clé, donc un programme qui la code en dur dans
+un dépôt public n'a aucune sécurité, et un programme qui en génère une neuve à
+chaque démarrage déconnecte tout le monde à chaque déploiement.
+
+```keal
+val a = auth(secretFromFile("app.secret"))
+```
+
+Trente-deux octets aléatoires, faits au premier lancement, relus à tous les
+suivants. **Gardez ce fichier hors du contrôle de version et sauvegardez-le** :
+il signe chaque session et poivre chaque mot de passe, donc le perdre
+déconnecte tout le monde *et* rend chaque empreinte stockée invérifiable.
+
+### Les mots de passe
+
+```keal
+val stored = a.hashPassword(quoi)                 // pbkdf2-sha256$25000$…$…
+if (a.checkPassword(quoi, stored)) { … }
+if (a.needsRehash(stored)) { ranger(a.hashPassword(quoi)) }
+```
+
+PBKDF2-HMAC-SHA256, écrit en Keal dans `src/hash.keal` et vérifié contre les
+vecteurs publiés à chaque construction. Un sel neuf de seize octets par mot de
+passe, et le nombre de tours rangé à côté — donc l'augmenter plus tard
+n'invalide rien, et `needsRehash` dit quand réécrire au nouveau compte.
+
+**Pourquoi 25 000 tours et non les 600 000 que demande l'OWASP**, puisque
+l'écart compte et que le cacher serait pire que de l'avoir : ce serveur est un
+fil, donc hacher bloque toutes les autres requêtes le temps que ça prend.
+25 000 coûtent environ 95 ms ici — mesuré, pas deviné. Au chiffre de l'OWASP,
+une connexion tiendrait la boucle deux secondes et demie, et dix connexions
+seraient un déni de service à la portée de n'importe qui.
+
+Trois choses portent le poids que le nombre de tours ne porte pas :
+
+* **Un poivre.** Chaque mot de passe est haché avec un secret qui n'est pas
+  dans la base. Une base volée n'est pas quelque chose contre quoi on peut
+  deviner, quel que soit le nombre de tours, à moins que le secret n'ait fui
+  aussi.
+* **Une limite de débit.** `a.mayTry(clé)` autorise dix tentatives par minute
+  et par clé. Appelez-la avec le nom du compte *et* avec le pair, pour qu'un
+  compte ne puisse pas être bloqué depuis ailleurs et qu'une machine ne puisse
+  pas parcourir une liste de noms.
+* **Le dire.** Si votre serveur a du temps, `a.rounds = 100000` est une ligne,
+  et elle coûte ce que la mesure dit qu'elle coûte.
+
+### Les sessions
+
+```keal
+a.signIn(redirect("/", 303), nom)       // pose le cookie
+a.signOut(redirect("/", 303))           // le supprime
+a.userOf(req)                           // String?, ou null
+a.signedIn(req)                         // Bool
+```
+
+Toute la session est le cookie : un nom et la seconde où il a été émis, signés.
+`HttpOnly`, `SameSite=Lax`, et `Secure` sauf si vous l'éteignez pour localhost.
+
+Il n'y a pas de table, donc rien n'expire côté serveur et rien ne grossit — et
+se déconnecter supprime un cookie, ce qui veut dire qu'un cookie volé reste bon
+jusqu'à son expiration. C'est le marché d'une session sans état, énoncé plutôt
+qu'enterré, et `a.ttl` en est le bouton (une semaine par défaut ; 0 signifie
+jusqu'à la fermeture du navigateur).
+
+### Les gardes
+
+```keal
+site.get("/prive", requireUser(a, { req -> … }))
+site.get("/admin", requireWhen(a, { qui -> estAdmin(db, qui) }, { req -> … }))
+```
+
+`requireUser` envoie un inconnu vers `a.signInPath` avec `?next=` nommant où il
+allait, ou répond 401 quand `signInPath` est vide — ce que veut une API et pas
+un navigateur. `requireWhen` reçoit le nom et répond s'il a le droit ;
+quelqu'un de connecté mais non autorisé reçoit **403**, pas 404.
+
+Relire `?next=` est `nextAfter(req)`, et la vérification est tout l'intérêt :
+une redirection qui suit une valeur qu'un inconnu contrôle est la façon dont un
+lien d'hameçonnage emprunte votre domaine. Tout ce qui n'est pas un chemin
+enraciné sur une seule barre est refusé, `//evil.example` compris — c'est celui
+qu'on oublie.
+
+### Le jeton
+
+`site.secure(a)` pose un champ caché dans chaque formulaire construit par
+`page` ou `livePage` dont la méthode change quelque chose, et refuse chaque
+requête non sûre qui ne l'a pas. Une API peut l'envoyer comme
+`X-CSRF-Token` à la place.
+
+Le jeton est dérivé de la session plutôt que rangé, donc il ne demande aucun
+état et ne peut pas se désynchroniser, et un visiteur sans session en reçoit
+quand même un — ce dont le formulaire de connexion a besoin, puisqu'il doit
+marcher avant que quiconque soit connecté.
+
+Une lacune à connaître : un gestionnaire qui construit son propre document avec
+`doc(...)` plutôt que par `page` n'est pas parcouru, donc ajoutez-y
+`a.csrfInput(req)` vous-même. Le motif qui évite la question est
+POST-puis-redirection, que vous voulez de toute façon.
+
+### Ce que cela ne fait pas
+
+* Ni OAuth, ni SAML, ni LDAP, ni OpenID. Un mot de passe et un cookie.
+* Aucun modèle de permissions. `requireWhen` vous donne un nom et prend un
+  `Bool` ; où vivent les rôles et ce qu'ils veulent dire regarde votre
+  programme.
+* Pas de TLS. Mettez-le derrière un proxy inverse — et tant que ce n'est pas
+  fait, `a.secure = false` ou le cookie ne partira pas du tout.
+* Pas de récupération de compte, pas de confirmation par courriel, pas de
+  second facteur.
+* **La cryptographie est écrite à la main.** `src/hash.keal` le dit en tête et
+  dit pourquoi : l'alternative était de lier OpenSSL, ce qui fait une chose de
+  plus à installer et une seconde réponse à *de quoi ceci dépend-il*. Chaque
+  fonction y est tenue aux vecteurs publiés par qui l'a spécifiée — ceux du
+  NIST pour SHA-256, ceux de la RFC 4231 pour HMAC, ceux de la RFC 7914 pour
+  PBKDF2 — à chaque construction. C'est assez pour dire que les algorithmes
+  sont les algorithmes. Ce n'est pas un audit, et ce guide ne prétendra pas que
+  c'en est un.
+
+## 15. Ce que le cadriciel ne fera pas
 
 * Il ne parlera à aucune base de données autre que SQLite, et seulement si vous
   la demandez par un second import et `-lsqlite3`.
@@ -768,4 +918,6 @@ changement qu'elle n'a pas causé.
 | `src/css.keal` | les feuilles de style, écrites en Keal |
 | `src/sql.keal` | SQLite : valeurs liées, lignes, transactions, migrations |
 | `runtime/kb_sql.h` | le C correspondant, seul à réclamer une bibliothèque |
+| `src/hash.keal` | SHA-256, HMAC, PBKDF2 — avec l'avertissement qui va avec |
+| `src/auth.keal` | mots de passe, sessions, gardes, jeton CSRF |
 | `src/app.keal` | la porte d'entrée depuis laquelle tout ce qui précède est joignable |

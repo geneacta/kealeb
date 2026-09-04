@@ -1,0 +1,88 @@
+/// The published vectors, on every build.
+///
+/// This file is what the warning at the top of `src/hash.keal` points at.
+/// Hand-written cryptographic code is worth exactly as much as what checks it,
+/// and what checks this is the vectors whoever specified each algorithm
+/// published with it — not a round trip, which would pass just as well if both
+/// halves were wrong in the same way.
+
+import "../src/hash.keal"
+
+var checks = 0
+
+proc same(got: String, want: String, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected ${want}, got ${got}")
+}
+
+proc ok(condition: Bool, what: String) {
+    checks = checks + 1
+    assert(condition, what)
+}
+
+// FIPS 180-4, the three the standard itself gives.
+same(hex(sha256(bufOf(""))),
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256 of nothing")
+same(hex(sha256(bufOf("abc"))),
+     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 abc")
+same(hex(sha256(bufOf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))),
+     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1", "sha256, two blocks")
+
+// A message exactly one block long, and one that forces the length into a
+// second block — the two places a padding bug hides.
+val exactly55 = "a".repeat(55)
+val exactly56 = "a".repeat(56)
+same(hex(sha256(bufOf(exactly55))),
+     "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318", "55 bytes, padding just fits")
+same(hex(sha256(bufOf(exactly56))),
+     "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a", "56 bytes, the length spills over")
+same(hex(sha256(bufOf("a".repeat(64)))),
+     "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb", "64 bytes, a whole block")
+
+// RFC 4231, the HMAC-SHA256 cases that fit a 32-byte output.
+val k20 = buf(20)
+for (i in 0..20) { k20.byte(0x0b) }
+same(hex(hmacSha256(k20, bufOf("Hi There"))),
+     "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7", "RFC 4231 case 1")
+same(hex(hmacSha256(bufOf("Jefe"), bufOf("what do ya want for nothing?"))),
+     "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", "RFC 4231 case 2")
+
+val k131 = buf(131)
+for (i in 0..131) { k131.byte(0xaa) }
+same(hex(hmacSha256(k131, bufOf("Test Using Larger Than Block-Size Key - Hash Key First"))),
+     "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
+     "RFC 4231 case 6 — a key longer than a block is hashed first")
+
+// The one-call form and the prepared-key form must agree, because PBKDF2 uses
+// the second and every vector above exercises the first.
+val prepared = hmacKey(bufOf("some key"))
+same(hex(hmacOf(prepared, bufOf("some message"))),
+     hex(hmacSha256(bufOf("some key"), bufOf("some message"))),
+     "a prepared key gives the same answer as a fresh one")
+
+// RFC 7914 §11's PBKDF2-HMAC-SHA256 vectors.
+same(hex(pbkdf2("password", bufOf("salt"), 1)),
+     "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b", "pbkdf2, one round")
+same(hex(pbkdf2("password", bufOf("salt"), 2)),
+     "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43", "pbkdf2, two rounds")
+same(hex(pbkdf2("password", bufOf("salt"), 4096)),
+     "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a", "pbkdf2, four thousand")
+
+// Base64url: the alphabet is the point, so check the two characters that
+// differ from ordinary Base64 and the absence of padding.
+same(base64url(bufOf("hello?>")), "aGVsbG8_Pg", "base64url has no padding and its own alphabet")
+val back = unbase64url("aGVsbG8_Pg")
+ok(back != null, "and reads back")
+if (back != null) { same(back.all(), "hello?>", "to what went in") }
+ok(unbase64url("not base64!") == null, "and refuses what is not it")
+
+ok(sameSecretText("abc", "abc"), "equal secrets are equal")
+ok(not sameSecretText("abc", "abd"), "and different ones are not")
+ok(not sameSecretText("abc", "abcd"), "including when one is longer")
+ok(not sameSecretText("", "x"), "and when one is empty")
+ok(sameSecretText("", ""), "but two empties are equal")
+
+ok(randomBytes(32).len == 32, "random bytes come in the number asked for")
+ok(hex(randomBytes(16)) != hex(randomBytes(16)), "and are not the same twice")
+
+println("${checks} checks passed against the published vectors")

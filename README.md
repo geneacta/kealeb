@@ -8,10 +8,10 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         3 989   the whole framework: HTTP, routing, the component
+  Keal         4 777   the whole framework: HTTP, routing, the component
                        tree, the renderer, stylesheets, JSON, WebSocket
-                       framing, the scheduler, the session hub, the diff and
-                       the SQLite layer
+                       framing, the scheduler, the session hub, the diff, the
+                       SQLite layer, and the hashing security rests on
   C              670   sockets, poll, byte blobs, and the SQLite door —
                        two headers, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
@@ -171,6 +171,22 @@ and re-throw, and migrations numbered by SQLite's own `user_version`, each step
 in a transaction with its own version bump. No object-relational mapper, on
 purpose.
 
+**Security, in four ideas and no fifth.** A password you can store, a session
+that is a signed cookie and nothing on the server, a guard that is an ordinary
+function wrapping a handler, and a token that makes a form only work when it
+came from your own page. `site.secure(a)` is two lines and switches on the CSRF
+token in every form, the refusal of every unsafe request without it, the
+response headers, and an origin check on the WebSocket. There is no role
+hierarchy, no expression language and no filter chain: a role is a string and a
+rule is a function.
+
+PBKDF2-HMAC-SHA256 written in Keal, checked against the published vectors on
+every build, with a salt per password and a **pepper** that is not in the
+database. The round count is 25 000 and the README will tell you why rather
+than hope you do not ask: this server is one thread, hashing blocks it, 25 000
+costs a measured 95 ms, and OWASP's 600 000 would let ten logins be a denial of
+service. The pepper and a rate limiter carry what the rounds do not.
+
 **The rest.** Static files with ETags and a 403 for any path that tries to
 climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
 no extensions. Cookies. Forms, including repeated fields.
@@ -203,8 +219,10 @@ tools/test.sh
 
 `units` holds the buffers, the encodings, the request parser, the router, the
 renderer, the diff, the stylesheet builder, the scheduler and the asset rules
-to their answers — 162 checks, no network. `sql` runs 65 more against a real
-SQLite in memory, and says it is skipped rather than passing quietly when there
+to their answers — 161 checks, no network. `hash` holds SHA-256, HMAC and
+PBKDF2 to the vectors their specifications published, and `auth` runs 65 checks
+over passwords, sessions, guards and the token, including the open redirect
+everybody forgets. `sql` runs 65 more against a real SQLite in memory, and says it is skipped rather than passing quietly when there
 is no library to link. `lifetime` builds an application, uses it, drops it, and reads what
 `keal build --audit` says outlived it, which must be nothing. `cc` emits the
 backend's own C and compiles it under five `-Werror` names — one of which had
@@ -238,9 +256,13 @@ The honest list.
   rewrites everything after it. Correct, and more work than it needs to be.
 * **Any database but SQLite.** Postgres would be `libpq` through the same C
   door, or its wire protocol written in Keal — a project of its own either way.
-* **Security.** No authentication, no user session, no CSRF token, no way to
-  say a route needs a signed-in visitor. This is now the largest thing
-  missing.
+* **Audited cryptography.** `src/hash.keal` is hand-written and says so at the
+  top. It is held to the vectors NIST, RFC 4231 and RFC 7914 published, on
+  every build, which says the algorithms are the algorithms — and is not an
+  audit. If that is not a trade you want, this is the file to replace with a
+  binding to a library.
+* **OAuth, SAML, LDAP, account recovery, a second factor.** A password and a
+  cookie.
 * **TLS.** None. Put it behind a reverse proxy, which is where a terminator
   belongs anyway.
 * **Windows.** `runtime/kb.h` is POSIX. Winsock wants a different `poll` and a

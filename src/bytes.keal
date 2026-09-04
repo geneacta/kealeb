@@ -68,6 +68,13 @@ public class Buf(package var h: Int, package var len: Int) {
         this.raw(other.h, off, n)
     }
 
+    /// Write the byte at `i`. Out of range does nothing — the buffer's length
+    /// is what `byte` and `text` moved, and this does not move it.
+    public proc setAt(i: Int, v: Int) {
+        if ((i < 0) or (i >= this.len)) { return }
+        blobSet(this.h, i, v band 0xFF)
+    }
+
     /// The byte at `i`, or -1.
     public func at(i: Int): Int {
         if ((i < 0) or (i >= this.len)) { return -1 }

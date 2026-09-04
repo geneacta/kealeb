@@ -7,3 +7,7 @@ build/
 # stray executables `keal build` leaves in the working directory
 /repro
 /t[0-9]*
+
+# a signing secret an example made; never in git
+*.secret
+*.db
