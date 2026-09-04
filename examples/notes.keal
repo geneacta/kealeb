@@ -1,0 +1,106 @@
+import "../kealeb.keal"
+import "../src/sql.keal"
+
+/// A live page whose state is a database — the example that ties the two
+/// halves together.
+///
+///     tools/build.sh examples/notes.keal -lsqlite3 && build/notes
+///
+/// The `-lsqlite3` is the whole cost of the database layer, and it is only
+/// paid by a program that imports it. Stop the server and start it again: the
+/// notes are still there, which is the point.
+///
+/// **The page is a function of the database.** Every render runs the query
+/// again rather than keeping a copy in the session, so there is nothing to
+/// invalidate and nothing that can be stale. That is the right shape for a
+/// table of this size and the wrong one for a million rows, where the query
+/// would want a `limit` and a page number; the framework does not hide which
+/// one you are writing.
+///
+/// Two open browsers see each other's notes, because they share the database
+/// — but only after the second one does something, because a live page
+/// rebuilds on its own events. `site.live.refreshAll()` in a timer is how a
+/// page learns about a change it did not cause, and the timer below shows it.
+
+val db = openDb("notes.db")
+
+/// Add one, and answer whether it worked. A top-level `proc` taking `var db`
+/// rather than a lambda closing over it: the closures in the page below may
+/// read `db`, but the ones that change it are named, so the writes are a list
+/// you can find.
+proc add(var db: Db, body: String) {
+    val text = body.trim()
+    if (text.isEmpty()) { return }
+    db.run("insert into note(body, made) values (?, ?)", [vText(text), vInt(epochS())])
+}
+
+proc setDone(var db: Db, id: Int, done: Bool) {
+    db.run("update note set done = ? where id = ?", [vBool(done), vInt(id)])
+}
+
+proc forget(var db: Db, id: Int) {
+    db.run("delete from note where id = ?", [vInt(id)])
+}
+
+val site = app("kealeb — notes")
+
+proc main() {
+    if (db == null) {
+        println("could not open notes.db")
+        exit(1)
+    }
+
+    // Every migration this program has ever had, in order, never reordered.
+    // A database already at version 2 runs nothing.
+    val reached = db.migrate([
+        "create table note(id integer primary key, body text not null, done integer not null default 0)",
+        "alter table note add column made integer not null default 0"
+    ])
+    if (reached < 0) {
+        println("the schema could not be brought up to date: ${db.error()}")
+        exit(1)
+    }
+    println("notes.db is at version ${reached}, holding ${db.value("select count(*) from note").int()} note(s)")
+
+    site.livePage("/", { req ->
+        var draft = ""
+        view({ ->
+            val rows = db.query("select id, body, done from note order by done, id desc limit 200", [])
+            val left = db.value("select count(*) from note where done = 0").int()
+
+            val items: List<Node> = []
+            for (r in rows) {
+                val id = r.int("id")
+                val done = r.bool("done")
+                val body = span(r.text("body"))
+                if (done) { body.style("text-decoration: line-through; opacity: .55") }
+                items.add(row([
+                    checkbox(done, { e -> setDone(db, id, e.checked()) }),
+                    body,
+                    button("remove", { e -> forget(db, id) }).cls("kb-danger")
+                ]).keyed("note-${id}"))
+            }
+
+            column([
+                h1("Notes"),
+                p("${left} left, of ${rows.size} shown. Kept in notes.db — stop the server and come back.").cls("kb-muted"),
+                card([row([
+                    field(draft, { e -> draft = e.value }).style("flex: 1"),
+                    button("Add", { e -> add(db, draft); draft = "" }).cls("kb-primary")
+                ])]),
+                column(items),
+                shownWhen(items.isEmpty(), p("Nothing yet.").cls("kb-muted"))
+            ])
+        })
+    })
+
+    // A page learns about a change it did not cause when something tells it
+    // to look again. Once a second is coarse and it is honest about being so:
+    // a rebuild that finds nothing different sends nothing, so an idle page
+    // costs a query and no bytes.
+    site.every(1000, { -> site.live.refreshAll() })
+
+    site.run(8080)
+}
+
+main()

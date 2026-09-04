@@ -6,6 +6,7 @@
 # Six steps, and two of them are controls.
 #
 #   guide     every snippet the guide promises, compiled
+#   sql       the database layer, against a real SQLite in memory
 #   units     the buffers, encodings, parser, router, renderer and diff
 #   lifetime  an application built, used, dropped — and leaving nothing
 #   leaks     a cycle built on purpose, which the audit must still see
@@ -38,13 +39,32 @@ elif command -v keal >/dev/null 2>&1; then KEALC=keal
 else echo "no keal compiler found — set KEAL, or build ../keal" >&2; exit 1
 fi
 
+# The database layer links against SQLite, which is not vendored. Asked once,
+# so a machine without it says so plainly rather than failing at a link error.
+HAVE_SQLITE=no
+if printf '#include <sqlite3.h>\nint main(void){return 0;}\n' \
+   | cc -x c -o /dev/null - -lsqlite3 2>/dev/null; then
+  HAVE_SQLITE=yes
+fi
+
 for t in tests/*.keal; do
   name=$(basename "$t" .keal)
   # Both of these are built with --audit below; building them twice would say
   # the same thing twice while meaning less the second time.
   [ "$name" = "lifetime" ] && continue
   [ "$name" = "leaks" ] && continue
-  sh tools/build.sh "$t" >/dev/null
+  # A test that imports the database layer needs the one library kealeb does
+  # not vendor. Read out of the file rather than from a list here, so the two
+  # cannot drift.
+  link=""
+  if grep -q 'sql\.keal' "$t"; then
+    if [ "$HAVE_SQLITE" != "yes" ]; then
+      echo "$name   skipped — no sqlite3 to link against, so the database layer is unchecked"
+      continue
+    fi
+    link="-lsqlite3"
+  fi
+  sh tools/build.sh "$t" $link >/dev/null
   printf '%-8s ' "$name"
   "build/$name"
 done

@@ -1,0 +1,409 @@
+/// SQLite, in about the smallest surface that is still honest.
+///
+///     import "kealeb/kealeb.keal"
+///     import "kealeb/src/sql.keal"
+///
+///     tools/build.sh app.keal -lsqlite3
+///
+/// It is a **second import** and a second link flag on purpose: a program that
+/// never opens a database must not link against one, and importing the
+/// umbrella does not reach this file.
+///
+/// There is no object-relational mapper here and there is not going to be one
+/// by accident. What there is: a connection, bound parameters, rows you read
+/// by name, transactions, and a migration that is a numbered list of
+/// statements. A row is a `Row` rather than your record because turning one
+/// into the other is three lines you can read, and a mapper that does it for
+/// you is a second language to learn before the first query.
+///
+/// **One rule, and it is the whole security story.** Everything a request can
+/// reach goes in as a bound value — `?` in the SQL, a `Val` in the list.
+/// `script()` is the only function that takes SQL with no parameters, it is
+/// for the schema you wrote, and it says so in its own name. There is no
+/// function here that builds SQL out of a string somebody sent you, because
+/// there is no safe version of that to offer.
+
+import "./bytes.keal"
+import "./ffi.keal"
+
+native """
+#include "kb_sql.h"
+"""
+
+// ------------------------------------------------------------- the boundary
+
+extern func kbsOpen(path: borrow String): Int = "kbs_open"
+extern proc kbsClose(h: Int) = "kbs_close"
+extern func kbsErrmsg(h: Int): own String = "kbs_errmsg"
+extern func kbsChanges(h: Int): Int = "kbs_changes"
+extern func kbsLastId(h: Int): Int = "kbs_last_id"
+extern func kbsExec(h: Int, sql: borrow String): Int = "kbs_exec"
+extern func kbsPrepare(h: Int, sql: borrow String): Int = "kbs_prepare"
+extern proc kbsFinalize(s: Int) = "kbs_finalize"
+extern func kbsBindCount(s: Int): Int = "kbs_bind_count"
+extern func kbsBindInt(s: Int, i: Int, v: Int): Int = "kbs_bind_int"
+extern func kbsBindFloat(s: Int, i: Int, v: Float): Int = "kbs_bind_float"
+extern func kbsBindText(s: Int, i: Int, v: borrow String): Int = "kbs_bind_text"
+extern func kbsBindNull(s: Int, i: Int): Int = "kbs_bind_null"
+extern func kbsStep(s: Int): Int = "kbs_step"
+extern func kbsColumns(s: Int): Int = "kbs_columns"
+extern func kbsColumnName(s: Int, i: Int): own String = "kbs_column_name"
+extern func kbsColumnType(s: Int, i: Int): Int = "kbs_column_type"
+extern func kbsColumnInt(s: Int, i: Int): Int = "kbs_column_int"
+extern func kbsColumnFloat(s: Int, i: Int): Float = "kbs_column_float"
+extern func kbsColumnText(s: Int, i: Int): own String = "kbs_column_text"
+extern func kbsVersion(): own String = "kbs_version"
+
+val stepRow: Int = 1
+val stepDone: Int = 2
+
+/// What `kbsPrepare` answers when the SQL held a second statement. Told apart
+/// from a compile failure because SQLite has nothing to say about this one —
+/// the prepare succeeded — and asking it anyway gets you the phrase
+/// `not an error`.
+val trailing: Int = -1
+
+/// The five things a value can be.
+public val typeNull: Int = 0
+public val typeInt: Int = 1
+public val typeFloat: Int = 2
+public val typeText: Int = 3
+public val typeBlob: Int = 4
+
+/// Which SQLite this program is linked against.
+public func sqliteVersion(): String { return kbsVersion() }
+
+// ---------------------------------------------------------------- a value
+
+/// One value, going in or coming out.
+///
+/// The accessors convert the way SQLite itself converts — asking a number for
+/// its text gives you the digits — because a `Row` that refused to answer
+/// until you had checked its type would be a `Row` nobody uses. `kind` is
+/// there for the times that difference matters, and `isNull` is separate from
+/// every fallback because *absent* and *zero* are not the same answer.
+public class Val(
+    public val kind: Int,
+    package val i: Int,
+    package val f: Float,
+    package val s: String
+) {
+    public func isNull(): Bool { return this.kind == typeNull }
+
+    public func int(fallback: Int = 0): Int {
+        return when (this.kind) {
+            typeInt -> this.i
+            typeFloat -> this.f.toInt()
+            typeText -> this.s.trim().toInt() ?: fallback
+            else -> fallback
+        }
+    }
+
+    public func float(fallback: Float = 0.0): Float {
+        return when (this.kind) {
+            typeFloat -> this.f
+            typeInt -> this.i.toFloat()
+            typeText -> this.s.trim().toFloat() ?: fallback
+            else -> fallback
+        }
+    }
+
+    public func text(fallback: String = ""): String {
+        return when (this.kind) {
+            typeText -> this.s
+            typeBlob -> this.s
+            typeInt -> "${this.i}"
+            typeFloat -> "${this.f}"
+            else -> fallback
+        }
+    }
+
+    /// SQLite has no boolean: 0 is false and anything else is true, which is
+    /// what `integer` columns holding flags mean everywhere.
+    public func bool(fallback: Bool = false): Bool {
+        if (this.kind == typeNull) { return fallback }
+        return this.int(0) != 0
+    }
+
+    public func toString(): String { return this.isNull() ? "null" : this.text() }
+}
+
+public func vNull(): Val { return Val(typeNull, 0, 0.0, "") }
+public func vInt(n: Int): Val { return Val(typeInt, n, 0.0, "") }
+public func vFloat(x: Float): Val { return Val(typeFloat, 0, x, "") }
+public func vText(s: String): Val { return Val(typeText, 0, 0.0, s) }
+/// SQLite has no boolean, so this is `vInt(0)` or `vInt(1)` and says which.
+public func vBool(b: Bool): Val { return vInt(b ? 1 : 0) }
+
+/// No parameters, spelt so a call site reads as a sentence.
+public func noArgs(): List<Val> { return [] }
+
+// ------------------------------------------------------------------ a row
+
+/// One row, read by name.
+public class Row(package val names: List<String>, package val vals: List<Val>) {
+    /// The column at this position.
+    public func at(i: Int): Val {
+        if ((i < 0) or (i >= this.vals.size)) { return vNull() }
+        return this.vals[i]
+    }
+
+    /// The column with this name. A name no column has answers null rather
+    /// than failing, because a query and its reader drift apart in the same
+    /// commit often enough that a crash there helps nobody.
+    public func get(name: String): Val {
+        val at = this.names.indexOf(name)
+        return at < 0 ? vNull() : this.vals[at]
+    }
+
+    public func has(name: String): Bool { return this.names.indexOf(name) >= 0 }
+    public func int(name: String, fallback: Int = 0): Int { return this.get(name).int(fallback) }
+    public func float(name: String, fallback: Float = 0.0): Float { return this.get(name).float(fallback) }
+    public func text(name: String, fallback: String = ""): String { return this.get(name).text(fallback) }
+    public func bool(name: String, fallback: Bool = false): Bool { return this.get(name).bool(fallback) }
+    public func isNull(name: String): Bool { return this.get(name).isNull() }
+
+    public func columns(): List<String> { return this.names }
+    public func size(): Int { return this.vals.size }
+
+    public func toString(): String {
+        val parts: List<String> = []
+        var i = 0
+        while (i < this.vals.size) {
+            parts.add("${this.names[i]}=${this.vals[i].toString()}")
+            i = i + 1
+        }
+        return "{" + parts.join(", ") + "}"
+    }
+}
+
+// ----------------------------------------------------------- a connection
+
+/// A connection.
+///
+/// It closes itself when its last reference goes — the same deterministic
+/// destruction a `Buf` uses for its bytes — so there is no pool to configure
+/// and nothing to remember to close. One connection per process is the shape
+/// this framework expects, because the server is one thread and a second
+/// connection would be waiting on the first.
+public class Db(package var h: Int, package var lastError: String) {
+    proc deinit() {
+        kbsClose(this.h)
+        this.h = 0
+    }
+
+    /// Is it open?
+    public func ok(): Bool { return this.h != 0 }
+
+    /// What went wrong most recently, or `""`. Every function below that can
+    /// fail leaves its reason here before answering.
+    public func error(): String { return this.lastError }
+
+    /// Rows added, changed or deleted by the most recent statement.
+    public func changed(): Int { return kbsChanges(this.h) }
+
+    /// The rowid the most recent insert gave out.
+    public func lastId(): Int { return kbsLastId(this.h) }
+
+    /// Run statements that take no parameters — a schema, a `PRAGMA`, an
+    /// index. Several at once is fine here and nowhere else.
+    ///
+    /// **Never give this anything a request touched.** It takes no
+    /// parameters, so the only way to put a value in it is to build the
+    /// string, and that is the injection. `run` and `query` are the ones with
+    /// a place for values.
+    public func script(sql: String): Bool {
+        if (kbsExec(this.h, sql) == 1) { return true }
+        this.lastError = kbsErrmsg(this.h)
+        return false
+    }
+
+    /// Run one statement that answers no rows. Answers how many rows it
+    /// changed, or -1 when it failed.
+    ///
+    ///     db.run("insert into note(body) values (?)", [vText(what)])
+    public func run(sql: String, params: List<Val> = []): Int {
+        val st = this.compile(sql, params)
+        if (st == 0) { return -1 }
+        val step = kbsStep(st)
+        kbsFinalize(st)
+        if (step > stepDone) {
+            this.lastError = kbsErrmsg(this.h)
+            return -1
+        }
+        return kbsChanges(this.h)
+    }
+
+    /// Run one statement and read every row it answers.
+    ///
+    /// Every row, into memory, in one go — so a query that could answer a
+    /// million rows should say `limit`. That is a real limit and it is stated
+    /// rather than hidden behind a cursor that looks lazy and is not.
+    public func query(sql: String, params: List<Val> = []): List<Row> {
+        val rows: List<Row> = []
+        val st = this.compile(sql, params)
+        if (st == 0) { return rows }
+
+        val count = kbsColumns(st)
+        val names: List<String> = []
+        for (i in 0..count) { names.add(kbsColumnName(st, i)) }
+
+        while (true) {
+            val step = kbsStep(st)
+            if (step != stepRow) {
+                if (step > stepDone) { this.lastError = kbsErrmsg(this.h) }
+                break
+            }
+            val vals: List<Val> = []
+            for (i in 0..count) { vals.add(readColumn(st, i)) }
+            rows.add(Row(names, vals))
+        }
+        kbsFinalize(st)
+        return rows
+    }
+
+    /// The first row, or `null` when there is none.
+    public func one(sql: String, params: List<Val> = []): Row? {
+        val rows = this.query(sql, params)
+        return rows.isEmpty() ? null : rows[0]
+    }
+
+    /// The first column of the first row — what `select count(*)` is for.
+    /// Absent is a null `Val`, which `int()` and `text()` turn into whatever
+    /// fallback you name.
+    public func value(sql: String, params: List<Val> = []): Val {
+        val row = this.one(sql, params)
+        if (row == null) { return vNull() }
+        return row.at(0)
+    }
+
+    // --------------------------------------------------------- transactions
+
+    public func begin(): Bool { return this.script("BEGIN") }
+    public func commit(): Bool { return this.script("COMMIT") }
+    public func rollback(): Bool { return this.script("ROLLBACK") }
+
+    /// Run `work` in a transaction. It commits when `work` answers true,
+    /// rolls back when it answers false, and rolls back and re-throws when it
+    /// throws — because a transaction left open by an exception is the bug
+    /// that locks the database for everybody else.
+    public func transaction(work: () -> Bool): Bool {
+        if (not this.begin()) { return false }
+        var wanted = false
+        try {
+            wanted = work()
+        } catch (e) {
+            this.rollback()
+            throw e
+        }
+        if (not wanted) {
+            this.rollback()
+            return false
+        }
+        return this.commit()
+    }
+
+    // ----------------------------------------------------------- migrations
+
+    /// Which migration this database is at. SQLite keeps the number for you,
+    /// in the file, which is why this needs no table of its own.
+    public func version(): Int { return this.value("PRAGMA user_version").int(0) }
+
+    /// Bring the database up to date.
+    ///
+    /// `steps` is every migration this program has ever had, in order and
+    /// never reordered: step 1 is `steps[0]`, and a database at version 2 runs
+    /// from `steps[2]` onward. Each step is a script, so it may hold several
+    /// statements, and each runs in a transaction with the version bump — so a
+    /// step that fails leaves the database exactly where it was.
+    ///
+    /// Answers the version it reached, or -1 when a step failed, with the
+    /// reason in `error()`.
+    public func migrate(steps: List<String>): Int {
+        var at = this.version()
+        if (at < 0) { at = 0 }
+        while (at < steps.size) {
+            val sql = steps[at]
+            val next = at + 1
+            if (not this.begin()) { return -1 }
+            if (not this.script(sql)) {
+                this.rollback()
+                return -1
+            }
+            // The version is part of the same transaction as the change it
+            // describes, so the two can never disagree.
+            if (not this.script("PRAGMA user_version = ${next}")) {
+                this.rollback()
+                return -1
+            }
+            if (not this.commit()) { return -1 }
+            at = next
+        }
+        return at
+    }
+
+    // ---------------------------------------------------------------- inside
+
+    /// Compile and bind. Answers 0 and leaves a reason when the SQL will not
+    /// compile, or when the number of values does not match the number of
+    /// `?` — which is a mistake worth catching here rather than as a null
+    /// somewhere later.
+    func compile(sql: String, params: List<Val>): Int {
+        this.lastError = ""
+        val st = kbsPrepare(this.h, sql)
+        if (st == trailing) {
+            this.lastError = "this is more than one statement; `run` and `query` take one, " +
+                             "and `script` is the one that takes several"
+            return 0
+        }
+        if (st == 0) {
+            this.lastError = kbsErrmsg(this.h)
+            return 0
+        }
+        val wanted = kbsBindCount(st)
+        if (wanted != params.size) {
+            kbsFinalize(st)
+            this.lastError = "the statement has ${wanted} parameter(s) and ${params.size} value(s) were given"
+            return 0
+        }
+        var i = 0
+        while (i < params.size) {
+            val v = params[i]
+            val at = i + 1
+            val done = when (v.kind) {
+                typeInt -> kbsBindInt(st, at, v.i)
+                typeFloat -> kbsBindFloat(st, at, v.f)
+                typeText -> kbsBindText(st, at, v.s)
+                else -> kbsBindNull(st, at)
+            }
+            if (done != 1) {
+                kbsFinalize(st)
+                this.lastError = "could not bind value ${at}"
+                return 0
+            }
+            i = i + 1
+        }
+        return st
+    }
+}
+
+func readColumn(st: Int, i: Int): Val {
+    val kind = kbsColumnType(st, i)
+    return when (kind) {
+        typeInt -> vInt(kbsColumnInt(st, i))
+        typeFloat -> vFloat(kbsColumnFloat(st, i))
+        typeText -> vText(kbsColumnText(st, i))
+        typeBlob -> Val(typeBlob, 0, 0.0, kbsColumnText(st, i))
+        else -> vNull()
+    }
+}
+
+/// Open a database, creating the file if it is not there.
+///
+/// `":memory:"` is a database that lives as long as the connection, which is
+/// what a test wants. Answers `null` when the file cannot be opened at all.
+public func openDb(path: String): Db? {
+    val h = kbsOpen(path)
+    if (h == 0) { return null }
+    return Db(h, "")
+}

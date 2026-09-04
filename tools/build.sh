@@ -4,6 +4,11 @@
 #   tools/build.sh examples/hello.keal
 #   build/hello
 #
+# Anything after the source file is passed to `keal build`. A program that
+# imports `src/sql.keal` needs the one library kealeb does not vendor:
+#
+#   tools/build.sh examples/notes.keal -lsqlite3
+#
 # There is no platform object to compile first: kealeb's whole C surface is
 # `static inline` in runtime/kb.h, which `keal build` pastes into the program
 # it is already compiling. So this script picks a compiler, points it at the
@@ -11,8 +16,9 @@
 set -e
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SRC=${1:?usage: tools/build.sh path/to/app.keal}
+SRC=${1:?usage: tools/build.sh path/to/app.keal [extra keal build args...]}
 [ -f "$SRC" ] || { echo "no such file: $SRC" >&2; exit 1; }
+shift
 SRC=$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")
 NAME=$(basename "$SRC" .keal)
 OUT=$ROOT/build
@@ -32,7 +38,11 @@ esac
 
 # `keal build` writes the executable, and the C it generated, into the working
 # directory under the source file's stem — so it runs in the output directory.
+# Anything after the source file goes to `keal build` as it was written, which
+# is how a program that imports `src/sql.keal` says `-lsqlite3`. The script
+# does not guess: linking a library nobody asked for is worse than a missing
+# flag, which at least says which symbol it wanted.
 echo "keal $(basename "$SRC")"
 cd "$OUT"
-"$KEAL" build "$SRC" -I"$ROOT/runtime"
+"$KEAL" build "$SRC" -I"$ROOT/runtime" "$@"
 echo "→ build/$NAME"

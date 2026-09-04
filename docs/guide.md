@@ -590,12 +590,134 @@ the prelude — because a scheduler that understands time zones and daylight
 saving is a different program from this one, and pretending otherwise is how
 a batch runs twice in October.
 
-## 13. What the framework will not do
+## 13. A database
 
-* It will not talk to a database. There is no driver, no SQL, no connection
-  pool — nothing. A program that needs one calls out through Keal's C interop
-  today, and a first-class answer is the largest thing missing from this
-  framework.
+SQLite, and it is a **second import and a second link flag** — a program that
+never opens a database must not link against one:
+
+```keal
+import "kealeb/kealeb.keal"
+import "kealeb/src/sql.keal"
+```
+
+```sh
+tools/build.sh app.keal -lsqlite3
+```
+
+```keal
+val db = openDb("notes.db")          // ":memory:" for a test
+if (db == null) { println("could not open it"); exit(1) }
+
+db.migrate([
+    "create table note(id integer primary key, body text not null, done integer not null default 0)",
+    "alter table note add column made integer not null default 0"
+])
+
+db.run("insert into note(body) values (?)", [vText(what)])
+for (r in db.query("select id, body, done from note order by id", [])) {
+    println("${r.int("id")} ${r.text("body")} ${r.bool("done")}")
+}
+```
+
+### The one rule
+
+**Everything a request can reach goes in as a bound value** — `?` in the SQL,
+a `Val` in the list. There is no function here that builds SQL out of a string
+somebody sent you, because there is no safe version of that to offer.
+
+`script()` is the only function that takes SQL with no parameters. It is for
+the schema you wrote, it runs several statements at once, and it is spelt
+differently from `run` on purpose. Never hand it anything a request touched.
+
+Two more refusals fall out of that, and both are the shape a half-finished
+edit takes:
+
+* `run` and `query` take **one** statement. `"select 1; drop table note"` is
+  refused with those words, not run and not silently truncated.
+* The number of values must match the number of `?`. A mismatch is refused
+  naming both counts, rather than becoming a null in a column three weeks
+  later.
+
+### Reading
+
+| | |
+|---|---|
+| `db.run(sql, params)` | rows changed, or -1 |
+| `db.query(sql, params)` | every row, as a list |
+| `db.one(sql, params)` | the first `Row?`, or null |
+| `db.value(sql, params)` | the first column of the first row, as a `Val` |
+| `db.script(sql)` | statements with no parameters — your schema |
+| `db.changed()` · `db.lastId()` · `db.error()` | |
+
+A `Row` is read by name — `r.int("id")`, `r.text("body")`, `r.float("score")`,
+`r.bool("done")`, `r.isNull("x")` — and a name no column has answers null
+rather than failing, because a query and its reader drift apart in the same
+commit often enough that a crash there helps nobody.
+
+The values convert the way SQLite itself converts: asking a number for its
+text gives you the digits. `isNull` is separate from every fallback, because
+*absent* and *zero* are not the same answer.
+
+Building: `vInt` `vFloat` `vText` `vBool` `vNull`. SQLite has no boolean, so
+`vBool` is an integer that says which.
+
+### Transactions
+
+```keal
+db.transaction({ ->
+    db.run("update account set balance = balance - ? where id = ?", [vInt(n), vInt(from)])
+    db.run("update account set balance = balance + ? where id = ?", [vInt(n), vInt(to)])
+    true                                  // false rolls back
+})
+```
+
+It commits when the block answers true, rolls back when it answers false, and
+rolls back **and re-throws** when it throws — because a transaction left open
+by an exception is what locks a database for everybody else.
+
+### Migrations
+
+`migrate(steps)` is every migration the program has ever had, in order and
+never reordered. Step 1 is `steps[0]`; a database at version 2 runs from
+`steps[2]` onward. SQLite keeps the number in the file, so there is no table
+to create and nothing to keep in sync.
+
+Each step runs **in a transaction with its own version bump**, so a step that
+fails leaves the database exactly where it was. It answers the version it
+reached, or -1 with the reason in `error()`.
+
+### What it is not
+
+There is no object-relational mapper, and there is not going to be one by
+accident. A `Row` is a `Row` rather than your record because turning one into
+the other is three lines you can read, and a mapper that does it for you is a
+second language to learn before the first query.
+
+The honest limits, each of which is a real one:
+
+* **One connection.** The server is one thread; a second connection would
+  spend its life waiting on the first. `Db` closes itself when its last
+  reference goes, so there is no pool to configure and nothing to remember.
+* **`query` reads every row into memory**, in one go. A query that could
+  answer a million rows should say `limit`. That is stated rather than hidden
+  behind a cursor that looks lazy and is not.
+* **No blobs.** A `BLOB` column read through `text()` comes back with anything
+  that is not well-formed UTF-8 turned into U+FFFD, which is the same
+  treatment bytes off a socket get. Read `kind` first if the column might not
+  be text.
+* **SQLite only.** Postgres would be `libpq` through the same C door, or its
+  wire protocol written in Keal — a project of its own either way.
+
+[`examples/notes.keal`](../examples/notes.keal) is a live page whose state is
+a database: stop it, start it again, the notes are there. It also shows the
+one thing a live page cannot work out for itself — `site.live.refreshAll()` in
+a timer, so a page learns about a change it did not cause.
+
+## 14. What the framework will not do
+
+* It will not talk to any database but SQLite, and only when you ask for it
+  with a second import and `-lsqlite3`.
+* It will not map rows onto your records for you. See §12.
 * It will not compress. It will not speak HTTP/2, or TLS.
 * It will not read a chunked request body — it answers **501** and says so.
 * It will not read `multipart/form-data`, so there are no file uploads yet.
@@ -621,4 +743,7 @@ a batch runs twice in October.
 | `src/json.keal` | JSON both ways |
 | `src/ws.keal` | WebSocket framing |
 | `src/live.keal` | sessions, the diff, and the browser client |
+| `src/css.keal` | stylesheets, written in Keal |
+| `src/sql.keal` | SQLite: bound values, rows, transactions, migrations |
+| `runtime/kb_sql.h` | the C for that, and the only thing that needs a library |
 | `src/app.keal` | the front door everything above is reachable from |

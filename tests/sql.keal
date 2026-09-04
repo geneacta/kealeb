@@ -1,0 +1,206 @@
+/// The database layer, against a real SQLite in memory.
+///
+///     tools/build.sh tests/sql.keal -lsqlite3 && build/sql
+///
+/// Nothing here is mocked: `:memory:` is a real database that lives as long as
+/// the connection, so every check below went through the same code a file
+/// would. What it holds to is the surface, the conversions, the transaction
+/// rules, the migration arithmetic — and the one property the whole file
+/// exists for, which is that a value can never become SQL.
+
+import "../src/sql.keal"
+
+var checks = 0
+
+proc ok(condition: Bool, what: String) {
+    checks = checks + 1
+    assert(condition, what)
+}
+
+proc same(got: String, want: String, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected `${want}`, got `${got}`")
+}
+
+proc sameInt(got: Int, want: Int, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected ${want}, got ${got}")
+}
+
+func fresh(): Db {
+    val db = openDb(":memory:")
+    if (db == null) { panic("could not open an in-memory database") }
+    return db
+}
+
+// -------------------------------------------------------------- the values
+
+proc testValues() {
+    ok(vNull().isNull(), "null is null")
+    ok(not vInt(0).isNull(), "and zero is not")
+    sameInt(vInt(7).int(), 7, "an integer")
+    same(vInt(7).text(), "7", "read as text, the way SQLite reads it")
+    sameInt(vText("12").int(), 12, "text that is a number")
+    sameInt(vText("nope").int(9), 9, "and text that is not")
+    sameInt(vNull().int(9), 9, "null takes the fallback")
+    ok(vFloat(1.5).float() == 1.5, "a float")
+    sameInt(vFloat(1.9).int(), 1, "truncated towards zero")
+    ok(vBool(true).bool(), "a boolean is an integer that says which")
+    ok(not vBool(false).bool(), "and the other one")
+    ok(vInt(2).bool(), "anything but zero is true, as everywhere else")
+    ok(vNull().bool(true), "and null takes the fallback rather than guessing")
+    same(vNull().toString(), "null", "a null renders as one")
+}
+
+// --------------------------------------------------------- schema and rows
+
+proc testRows() {
+    val db = fresh()
+    ok(db.ok(), "a database opens")
+    ok(db.script("create table t(id integer primary key, name text, score real, flag integer)"),
+       "a schema runs")
+
+    sameInt(db.run("insert into t(name, score, flag) values (?, ?, ?)",
+                   [vText("Ada"), vFloat(9.5), vBool(true)]), 1, "one row inserted")
+    sameInt(db.lastId(), 1, "with the rowid it was given")
+    db.run("insert into t(name, score, flag) values (?, ?, ?)", [vText("Grace"), vFloat(8.0), vBool(false)])
+    db.run("insert into t(name) values (?)", [vNull()])
+
+    val rows = db.query("select id, name, score, flag from t order by id")
+    sameInt(rows.size, 3, "three rows come back")
+    same(rows[0].text("name"), "Ada", "read by name")
+    ok(rows[0].float("score") == 9.5, "a real column")
+    ok(rows[0].bool("flag"), "a flag column")
+    ok(rows[2].isNull("name"), "a null column is null")
+    same(rows[2].text("name", "—"), "—", "and takes its fallback")
+    sameInt(rows[0].size(), 4, "four columns")
+    same(rows[0].columns().join(","), "id,name,score,flag", "named in the order asked for")
+    ok(rows[0].has("score"), "a column that is there")
+    ok(not rows[0].has("nope"), "and one that is not")
+    ok(rows[0].get("nope").isNull(), "which reads as null rather than failing")
+    same(rows[0].at(1).text(), "Ada", "and can be read by position")
+    ok(rows[0].toString().contains("name=Ada"), "a row renders readably")
+
+    sameInt(db.value("select count(*) from t").int(), 3, "a single value")
+    val one = db.one("select name from t where id = ?", [vInt(2)])
+    ok(one != null, "a single row")
+    if (one != null) { same(one.text("name"), "Grace", "the right one") }
+    ok(db.one("select name from t where id = ?", [vInt(99)]) == null,
+       "and no row at all is null, not an empty one")
+
+    sameInt(db.run("update t set score = ? where flag = ?", [vFloat(10.0), vBool(true)]), 1,
+            "an update says how many rows it changed")
+    sameInt(db.run("delete from t where id > ?", [vInt(90)]), 0, "and so does one that changed none")
+    ok(db.query("select 1 where 0", []).isEmpty(), "a query with no rows is an empty list")
+}
+
+// ------------------------------------------------ the reason this is safe
+
+proc testInjection() {
+    val db = fresh()
+    db.script("create table note(id integer primary key, body text)")
+
+    // The classic. It is stored, exactly, as the text somebody typed.
+    val hostile = "x'); drop table note; --"
+    sameInt(db.run("insert into note(body) values (?)", [vText(hostile)]), 1,
+            "a hostile value inserts like any other")
+    same(db.value("select body from note").text(), hostile, "and is stored verbatim")
+    sameInt(db.value("select count(*) from note").int(), 1, "the table is still there")
+
+    // A second statement in one call is refused, not run — which is the same
+    // defence one layer up, for the case where somebody built the SQL anyway.
+    sameInt(db.run("select 1; drop table note", []), -1, "two statements in one call are refused")
+    ok(db.error().contains("more than one statement"),
+       "and said so in words, rather than SQLite's `not an error`")
+    sameInt(db.value("select count(*) from note").int(), 1, "so the table is still there too")
+
+    // The number of values must match the number of holes. A mismatch is the
+    // shape a half-finished edit takes, and it is caught here rather than
+    // becoming a null in a column three weeks later.
+    sameInt(db.run("insert into note(body) values (?)", []), -1, "too few values is refused")
+    ok(db.error().contains("1 parameter"), "naming both counts")
+    sameInt(db.run("insert into note(body) values (?)", [vText("a"), vText("b")]), -1,
+            "and so is too many")
+
+    sameInt(db.run("this is not sql", []), -1, "SQL that will not compile is refused")
+    ok(not db.error().isEmpty(), "with SQLite's own words for why")
+}
+
+// ------------------------------------------------------------ transactions
+
+proc testTransactions() {
+    val db = fresh()
+    db.script("create table t(n integer)")
+
+    val kept = db.transaction({ ->
+        db.run("insert into t(n) values (?)", [vInt(1)])
+        db.run("insert into t(n) values (?)", [vInt(2)])
+        true
+    })
+    ok(kept, "a transaction that wants to commit, commits")
+    sameInt(db.value("select count(*) from t").int(), 2, "and both rows are there")
+
+    val dropped = db.transaction({ ->
+        db.run("insert into t(n) values (?)", [vInt(3)])
+        false
+    })
+    ok(not dropped, "one that wants to roll back, rolls back")
+    sameInt(db.value("select count(*) from t").int(), 2, "and the row is gone")
+
+    // A transaction left open by an exception is what locks a database for
+    // everybody else, so it rolls back and re-throws rather than swallowing.
+    var threw = false
+    try {
+        db.transaction({ ->
+            db.run("insert into t(n) values (?)", [vInt(4)])
+            boom()
+        })
+    } catch (e) {
+        threw = true
+    }
+    ok(threw, "an exception inside a transaction reaches the caller")
+    sameInt(db.value("select count(*) from t").int(), 2, "and the transaction was rolled back")
+    ok(db.run("insert into t(n) values (?)", [vInt(5)]) == 1,
+       "so the database is not left locked")
+}
+
+func boom(): Bool { throw "on purpose" }
+
+// ------------------------------------------------------------- migrations
+
+proc testMigrations() {
+    val db = fresh()
+    sameInt(db.version(), 0, "a new database is at version zero")
+
+    val steps = [
+        "create table a(id integer primary key)",
+        "create table b(id integer primary key); create index b_id on b(id)",
+        "alter table a add column note text"
+    ]
+    sameInt(db.migrate(steps), 3, "three steps run")
+    sameInt(db.version(), 3, "and the version says so, in the file")
+    sameInt(db.migrate(steps), 3, "running it again does nothing")
+
+    db.run("insert into a(note) values (?)", [vText("still here")])
+    val more: List<String> = []
+    for (s in steps) { more.add(s) }
+    more.add("create table c(id integer primary key)")
+    sameInt(db.migrate(more), 4, "a fourth step runs on its own")
+    sameInt(db.value("select count(*) from a").int(), 1, "and the data survived it")
+
+    // A step that fails leaves the version where it was, because the change
+    // and the version bump are the same transaction.
+    val broken: List<String> = []
+    for (s in more) { broken.add(s) }
+    broken.add("create table c(id integer primary key)")   // c already exists
+    sameInt(db.migrate(broken), -1, "a step that fails answers -1")
+    ok(not db.error().isEmpty(), "with a reason")
+    sameInt(db.version(), 4, "and the version did not move")
+}
+
+testValues()
+testRows()
+testInjection()
+testTransactions()
+testMigrations()
+println("${checks} checks passed against SQLite ${sqliteVersion()}")

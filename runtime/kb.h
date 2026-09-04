@@ -155,12 +155,12 @@ static inline int64_t kb_utf8_len(unsigned char c) {
     return 0;
 }
 
-static inline char *kb_blob_text(int64_t h, int64_t off, int64_t len) {
-    if (!h || off < 0 || len < 0) { char *e = (char *)malloc(1); if (e) e[0] = 0; return e; }
-    int64_t n = kb_blob_size(h);
-    if (off > n) off = n;
-    if (len > n - off) len = n - off;
-    const unsigned char *p = (const unsigned char *)h + off;
+/* The validator itself, over any bytes. `kb_blob_text` was its only caller
+ * until a database needed one too: text out of SQLite is UTF-8 if whatever
+ * wrote it was honest, and "if whatever wrote it was honest" is not a promise
+ * a boundary gets to make. One validator, every caller. */
+static inline char *kb_text_from(const unsigned char *p, int64_t len) {
+    if (!p || len < 0) { char *e = (char *)malloc(1); if (e) e[0] = 0; return e; }
     /* Worst case every byte becomes three. */
     char *out = (char *)malloc((size_t)len * 3 + 1);
     if (!out) return NULL;
@@ -188,6 +188,14 @@ static inline char *kb_blob_text(int64_t h, int64_t off, int64_t len) {
     }
     out[o] = 0;
     return out;
+}
+
+static inline char *kb_blob_text(int64_t h, int64_t off, int64_t len) {
+    if (!h || off < 0 || len < 0) { char *e = (char *)malloc(1); if (e) e[0] = 0; return e; }
+    int64_t n = kb_blob_size(h);
+    if (off > n) off = n;
+    if (len > n - off) len = n - off;
+    return kb_text_from((const unsigned char *)h + off, len);
 }
 
 /* ---------------------------------------------------------------- sockets */

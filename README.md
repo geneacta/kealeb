@@ -8,10 +8,12 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         3 580   the whole framework: HTTP, routing, the component
+  Keal         3 989   the whole framework: HTTP, routing, the component
                        tree, the renderer, stylesheets, JSON, WebSocket
-                       framing, the scheduler, the session hub and the diff
-  C              442   sockets, poll, byte blobs — one header, no .c file
+                       framing, the scheduler, the session hub, the diff and
+                       the SQLite layer
+  C              670   sockets, poll, byte blobs, and the SQLite door —
+                       two headers, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
                        apply six kinds of patch
 ```
@@ -159,6 +161,16 @@ handler reads and writes with nothing to synchronise. A job that throws is
 reported and keeps its schedule. The whole cost is one comparison per turn: the
 loop was already sleeping with a deadline.
 
+**A database, if you ask for it.** SQLite, behind a second import and
+`-lsqlite3`, so a program that never opens one never links against one. Bound
+values and nothing else: there is no function that builds SQL out of a string
+somebody sent you, `run` and `query` take one statement and refuse two by name,
+and `script` — the only one that takes SQL with no parameters — is spelt
+differently because it is for the schema you wrote. Transactions that roll back
+and re-throw, and migrations numbered by SQLite's own `user_version`, each step
+in a transaction with its own version bump. No object-relational mapper, on
+purpose.
+
 **The rest.** Static files with ETags and a 403 for any path that tries to
 climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
 no extensions. Cookies. Forms, including repeated fields.
@@ -191,7 +203,9 @@ tools/test.sh
 
 `units` holds the buffers, the encodings, the request parser, the router, the
 renderer, the diff, the stylesheet builder, the scheduler and the asset rules
-to their answers — 162 checks, no network. `lifetime` builds an application, uses it, drops it, and reads what
+to their answers — 162 checks, no network. `sql` runs 65 more against a real
+SQLite in memory, and says it is skipped rather than passing quietly when there
+is no library to link. `lifetime` builds an application, uses it, drops it, and reads what
 `keal build --audit` says outlived it, which must be nothing. `cc` emits the
 backend's own C and compiles it under five `-Werror` names — one of which had
 been announcing a real miscompilation on every build until somebody read it.
@@ -222,11 +236,11 @@ The honest list.
   it does not yet do is make the move cheap: the diff walks children by index
   and does not look for one that moved, so inserting at the front still
   rewrites everything after it. Correct, and more work than it needs to be.
-* **A database.** Nothing at all — no driver, no SQL, no pool. This is the
-  largest thing missing, and it is missing on purpose until somebody decides
-  which database and accepts what that adds to the build: Keal reaches C, so
-  SQLite is four commands away and Postgres is a protocol nobody has written
-  here yet.
+* **Any database but SQLite.** Postgres would be `libpq` through the same C
+  door, or its wire protocol written in Keal — a project of its own either way.
+* **Security.** No authentication, no user session, no CSRF token, no way to
+  say a route needs a signed-in visitor. This is now the largest thing
+  missing.
 * **TLS.** None. Put it behind a reverse proxy, which is where a terminator
   belongs anyway.
 * **Windows.** `runtime/kb.h` is POSIX. Winsock wants a different `poll` and a

@@ -607,12 +607,137 @@ Une tâche qui doit tourner à 03:00 doit regarder l'horloge elle-même —
 fuseaux et l'heure d'été est un autre programme que celui-ci, et prétendre le
 contraire est la façon dont un traitement tourne deux fois en octobre.
 
-## 13. Ce que le cadriciel ne fera pas
+## 13. Une base de données
 
-* Il ne parlera à aucune base de données. Pas de pilote, pas de SQL, pas de
-  pool de connexions — rien. Un programme qui en a besoin sort par l'interop C
-  de Keal aujourd'hui, et une réponse de première classe est la plus grosse
-  chose qui manque à ce cadriciel.
+SQLite, et c'est un **second import et un second drapeau de liaison** — un
+programme qui n'ouvre jamais de base ne doit pas se lier à une :
+
+```keal
+import "kealeb/kealeb.keal"
+import "kealeb/src/sql.keal"
+```
+
+```sh
+tools/build.sh app.keal -lsqlite3
+```
+
+```keal
+val db = openDb("notes.db")          // ":memory:" pour un test
+if (db == null) { println("impossible à ouvrir"); exit(1) }
+
+db.migrate([
+    "create table note(id integer primary key, body text not null, done integer not null default 0)",
+    "alter table note add column made integer not null default 0"
+])
+
+db.run("insert into note(body) values (?)", [vText(quoi)])
+for (r in db.query("select id, body, done from note order by id", [])) {
+    println("${r.int("id")} ${r.text("body")} ${r.bool("done")}")
+}
+```
+
+### La règle unique
+
+**Tout ce qu'une requête peut atteindre entre comme valeur liée** — un `?`
+dans le SQL, un `Val` dans la liste. Il n'existe ici aucune fonction qui
+construise du SQL à partir d'une chaîne qu'on vous a envoyée, parce qu'il n'en
+existe pas de version sûre à proposer.
+
+`script()` est la seule fonction qui prenne du SQL sans paramètres. Elle est
+pour le schéma que vous avez écrit, elle enchaîne plusieurs instructions, et
+elle s'épelle autrement que `run` exprès. Ne lui donnez jamais rien qu'une
+requête ait touché.
+
+Deux autres refus en découlent, et tous deux sont la forme que prend une
+modification laissée à moitié :
+
+* `run` et `query` prennent **une** instruction. `"select 1; drop table note"`
+  est refusé avec ces mots-là, ni exécuté ni tronqué en silence.
+* Le nombre de valeurs doit correspondre au nombre de `?`. Un écart est refusé
+  en nommant les deux comptes, plutôt que de devenir un `null` dans une colonne
+  trois semaines plus tard.
+
+### La lecture
+
+| | |
+|---|---|
+| `db.run(sql, params)` | lignes changées, ou -1 |
+| `db.query(sql, params)` | toutes les lignes, en liste |
+| `db.one(sql, params)` | la première `Row?`, ou null |
+| `db.value(sql, params)` | la première colonne de la première ligne, en `Val` |
+| `db.script(sql)` | des instructions sans paramètres — votre schéma |
+| `db.changed()` · `db.lastId()` · `db.error()` | |
+
+Une `Row` se lit par nom — `r.int("id")`, `r.text("body")`, `r.float("score")`,
+`r.bool("done")`, `r.isNull("x")` — et un nom qu'aucune colonne ne porte répond
+null plutôt que d'échouer : une requête et son lecteur divergent dans le même
+commit assez souvent pour qu'un plantage là n'aide personne.
+
+Les valeurs se convertissent comme SQLite les convertit : demander son texte à
+un nombre donne ses chiffres. `isNull` est séparé de tous les défauts, parce
+qu'*absent* et *zéro* ne sont pas la même réponse.
+
+Construction : `vInt` `vFloat` `vText` `vBool` `vNull`. SQLite n'a pas de
+booléen, donc `vBool` est un entier qui dit lequel.
+
+### Les transactions
+
+```keal
+db.transaction({ ->
+    db.run("update compte set solde = solde - ? where id = ?", [vInt(n), vInt(de)])
+    db.run("update compte set solde = solde + ? where id = ?", [vInt(n), vInt(vers)])
+    true                                  // false annule
+})
+```
+
+Elle valide quand le bloc répond `true`, annule quand il répond `false`, et
+annule **puis relance** quand il lève — parce qu'une transaction laissée
+ouverte par une exception est ce qui verrouille la base pour tout le monde.
+
+### Les migrations
+
+`migrate(étapes)` est la liste de toutes les migrations que le programme a
+jamais eues, dans l'ordre et jamais réordonnée. L'étape 1 est `étapes[0]` ; une
+base en version 2 repart de `étapes[2]`. SQLite garde le numéro dans le
+fichier, donc il n'y a aucune table à créer et rien à tenir synchronisé.
+
+Chaque étape tourne **dans une transaction avec son propre changement de
+version**, donc une étape qui échoue laisse la base exactement où elle était.
+Elle répond la version atteinte, ou -1 avec la raison dans `error()`.
+
+### Ce que ce n'est pas
+
+Il n'y a pas de mapping objet-relationnel, et il n'y en aura pas par accident.
+Une `Row` est une `Row` et non votre record, parce que passer de l'une à
+l'autre fait trois lignes lisibles, alors qu'un mapper qui le fait pour vous
+est un second langage à apprendre avant la première requête.
+
+Les limites honnêtes, toutes réelles :
+
+* **Une connexion.** Le serveur est un fil ; une seconde connexion passerait sa
+  vie à attendre la première. `Db` se ferme quand sa dernière référence
+  disparaît, donc pas de pool à régler et rien à retenir.
+* **`query` lit toutes les lignes en mémoire**, d'un coup. Une requête qui
+  pourrait en rendre un million doit dire `limit`. C'est énoncé plutôt que
+  caché derrière un curseur qui a l'air paresseux et ne l'est pas.
+* **Pas de blobs.** Une colonne `BLOB` lue par `text()` revient avec tout ce
+  qui n'est pas de l'UTF-8 bien formé changé en U+FFFD — le même traitement que
+  les octets d'une socket. Lisez `kind` d'abord si la colonne peut ne pas être
+  du texte.
+* **SQLite seulement.** Postgres, ce serait `libpq` par la même porte C, ou son
+  protocole écrit en Keal — un projet à part entière dans les deux cas.
+
+[`examples/notes.keal`](../examples/notes.keal) est une page vivante dont
+l'état est une base : arrêtez-la, relancez-la, les notes sont là. Elle montre
+aussi la seule chose qu'une page vivante ne peut pas deviner —
+`site.live.refreshAll()` dans un minuteur, pour qu'une page apprenne un
+changement qu'elle n'a pas causé.
+
+## 14. Ce que le cadriciel ne fera pas
+
+* Il ne parlera à aucune base de données autre que SQLite, et seulement si vous
+  la demandez par un second import et `-lsqlite3`.
+* Il ne fera pas correspondre les lignes à vos records tout seul. Voir §12.
 * Il ne compressera pas. Il ne parlera ni HTTP/2 ni TLS.
 * Il ne lira pas un corps de requête en morceaux — il répond **501** et le
   dit.
@@ -640,4 +765,7 @@ contraire est la façon dont un traitement tourne deux fois en octobre.
 | `src/json.keal` | JSON dans les deux sens |
 | `src/ws.keal` | le tramage WebSocket |
 | `src/live.keal` | les sessions, le diff, et le client du navigateur |
+| `src/css.keal` | les feuilles de style, écrites en Keal |
+| `src/sql.keal` | SQLite : valeurs liées, lignes, transactions, migrations |
+| `runtime/kb_sql.h` | le C correspondant, seul à réclamer une bibliothèque |
 | `src/app.keal` | la porte d'entrée depuis laquelle tout ce qui précède est joignable |
