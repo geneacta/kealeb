@@ -9,9 +9,11 @@
 
 import "../src/app.keal"
 import "../src/bytes.keal"
+import "../src/css.keal"
 import "../src/http.keal"
 import "../src/json.keal"
 import "../src/router.keal"
+import "../src/server.keal"
 import "../src/text.keal"
 import "../src/live.keal"
 import "../src/theme.keal"
@@ -339,6 +341,79 @@ proc testJson() {
     if (emoji != null) { sameInt(emoji.text().length, 1, "as one character") }
 }
 
+// --------------------------------------------------------------- the styles
+
+proc testCss() {
+    same(sheet([rule(".a").fg("red")]), ".a {\n  color: red;\n}\n", "one rule")
+    same(sheet([rule(".a").fg("red").bg("blue")]),
+         ".a {\n  color: red;\n  background: blue;\n}\n", "two declarations, in order")
+    same(sheet([]), "", "no rules is no stylesheet")
+    same(sheet([rule(".a").set("--x", "1")]), ".a {\n  --x: 1;\n}\n",
+         "a custom property is a property")
+    sameInt(vars(":root", [("--a", "1"), ("--b", "2")]).count(), 2, "vars sets each pair")
+    same(sheet([media("(min-width: 40em)", [rule(".a").pad("1rem")])]),
+         "@media (min-width: 40em) {\n  .a {\n    padding: 1rem;\n  }\n}\n",
+         "an at-rule nests and indents")
+    ok(sheet([supports("(display: grid)", [rule(".g").display("grid")])]).startsWith("@supports"),
+       "and so does @supports")
+
+    // A rule is a value, which is the whole reason this exists rather than a
+    // string: it can be built from a loop.
+    val many: List<Rule> = []
+    for (i in 1..4) { many.add(rule(".c${i}").width("${i * 25}%")) }
+    val built = sheet(many)
+    ok(built.contains(".c1 {") and built.contains(".c3 {"), "rules built from a loop")
+    ok(built.contains("width: 75%;"), "each with its own value")
+}
+
+// ------------------------------------------------------------- the schedule
+
+proc boom() { throw "on purpose" }
+
+proc testSchedule() {
+    val s = server(Router(), 0)
+    s.log = false
+    sameInt(s.timerCount(), 0, "a new server has no timers")
+
+    var ticks = 0
+    var once = 0
+    s.every(5, { -> ticks = ticks + 1 })
+    val shot = s.after(5, { -> once = once + 1 })
+    sameInt(s.timerCount(), 2, "two installed")
+
+    var turns = 0
+    while (turns < 12) {
+        s.tick(5)
+        turns = turns + 1
+    }
+    ok(ticks >= 3, "the repeating job ran more than once (${ticks})")
+    sameInt(once, 1, "and the one-shot ran exactly once")
+    sameInt(s.timerCount(), 1, "which is why it is no longer installed")
+
+    val before = ticks
+    s.every(5, { -> ticks = ticks + 1 }).cancel()
+    s.tick(10)
+    ok(ticks > before, "the surviving job still runs")
+    sameInt(s.timerCount(), 1, "and a job cancelled before its first run is forgotten")
+
+    // A job that throws is reported and keeps its schedule: a batch that
+    // fails once should still be tried next time, and must not take the
+    // server with it.
+    var angry = 0
+    println("")
+    println("  (the next two lines are the framework reporting a job that throws,")
+    println("   which is what this check is about)")
+    // Through a `proc` rather than `{ -> ... throw ... }`: a lambda whose last
+    // expression is a `throw` has type `Nothing`, which the C backend refuses
+    // by name. Nothing is broken by it; the shape just has to be written the
+    // other way round.
+    s.every(5, { -> angry = angry + 1; boom() })
+    s.tick(10)
+    s.tick(10)
+    ok(angry >= 2, "a job that throws is run again (${angry})")
+    print("  ")
+}
+
 // -------------------------------------------------------------- the assets
 
 proc testAssets() {
@@ -362,5 +437,7 @@ testRouter()
 testUi()
 testJson()
 testLive()
+testCss()
+testSchedule()
 testAssets()
 println("${checks} checks passed")

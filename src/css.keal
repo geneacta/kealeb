@@ -1,0 +1,121 @@
+/// Stylesheets, written in Keal.
+///
+/// `.style("color: red")` takes a string and always will — for one
+/// declaration on one node that is the shortest honest thing. This file is
+/// for the other case: a stylesheet the program builds, where the selectors
+/// and the values come from the same place as everything else, and where a
+/// typo in a property name is a string either way but a typo in the *shape*
+/// is caught.
+///
+/// It is not a CSS parser and does not validate: what you write goes out. Its
+/// job is composition — a rule is a value, so it can be held in a list,
+/// returned from a function, and built from a loop — and serving, which is
+/// where the content hash in `app.keal` comes in.
+///
+///     sheet([
+///         rule(".hero").fg("white").bg("#2f6feb").pad("3rem 2rem"),
+///         rule(".hero h1").set("font-size", "2.4rem"),
+///         media("(max-width: 600px)", [rule(".hero").pad("1.5rem")])
+///     ])
+
+import "./bytes.keal"
+
+/// One declaration.
+public record Decl(val property: String, val value: String)
+
+/// A selector and what it sets. Every setter answers the rule, so a rule is
+/// one line unless you want it to be several.
+public class Rule(
+    public val selector: String,
+    package var decls: List<Decl>,
+    /// A rule may hold rules: this is how `media` and `supports` carry their
+    /// contents without a second type.
+    package var inner: List<Rule>
+) {
+    /// Set any property. The one that always works, and the one every setter
+    /// below is written in terms of.
+    public func set(property: String, value: String): Rule {
+        this.decls.add(Decl(property, value))
+        return this
+    }
+
+    /// The dozen that are worth a name because they are what a page is made
+    /// of. Anything else is `set`, which is not a worse way to write it.
+    public func fg(v: String): Rule { return this.set("color", v) }
+    public func bg(v: String): Rule { return this.set("background", v) }
+    public func pad(v: String): Rule { return this.set("padding", v) }
+    public func margin(v: String): Rule { return this.set("margin", v) }
+    public func border(v: String): Rule { return this.set("border", v) }
+    public func radius(v: String): Rule { return this.set("border-radius", v) }
+    public func font(v: String): Rule { return this.set("font", v) }
+    public func size(v: String): Rule { return this.set("font-size", v) }
+    public func weight(v: String): Rule { return this.set("font-weight", v) }
+    public func width(v: String): Rule { return this.set("width", v) }
+    public func height(v: String): Rule { return this.set("height", v) }
+    public func gap(v: String): Rule { return this.set("gap", v) }
+    public func display(v: String): Rule { return this.set("display", v) }
+    public func flex(v: String): Rule { return this.set("flex", v) }
+    public func grid(v: String): Rule { return this.set("grid-template-columns", v) }
+    public func shadow(v: String): Rule { return this.set("box-shadow", v) }
+    public func opacity(v: String): Rule { return this.set("opacity", v) }
+    public func cursor(v: String): Rule { return this.set("cursor", v) }
+    public func position(v: String): Rule { return this.set("position", v) }
+    public func overflow(v: String): Rule { return this.set("overflow", v) }
+    public func transition(v: String): Rule { return this.set("transition", v) }
+
+    /// A rule inside this one, for the at-rules that take a block.
+    public func add(r: Rule): Rule {
+        this.inner.add(r)
+        return this
+    }
+
+    /// How many declarations, for a test that wants to know a builder built.
+    public func count(): Int { return this.decls.size }
+}
+
+/// A rule for a selector.
+public func rule(selector: String): Rule {
+    val decls: List<Decl> = []
+    val inner: List<Rule> = []
+    return Rule(selector, decls, inner)
+}
+
+/// `@media (max-width: 600px) { … }`. The at-rule is the selector, which is
+/// why nothing here needed a second type.
+public func media(query: String, rules: List<Rule>): Rule {
+    val r = rule("@media ${query}")
+    for (inner in rules) { r.add(inner) }
+    return r
+}
+
+/// `@supports (display: grid) { … }`.
+public func supports(query: String, rules: List<Rule>): Rule {
+    val r = rule("@supports ${query}")
+    for (inner in rules) { r.add(inner) }
+    return r
+}
+
+/// The custom properties a theme is made of, as one rule.
+///
+///     vars(":root", [("--accent", "#2f6feb"), ("--radius", "10px")])
+public func vars(selector: String, pairs: List<(String, String)>): Rule {
+    val r = rule(selector)
+    for (pair in pairs) { r.set(pair.first, pair.second) }
+    return r
+}
+
+/// A whole stylesheet, as text.
+public func sheet(rules: List<Rule>): String {
+    val out = buf(1024)
+    for (r in rules) { writeRule(r, out, "") }
+    return out.all()
+}
+
+proc writeRule(r: Rule, out: Buf, indent: String) {
+    out.text("${indent}${r.selector} {\n")
+    for (d in r.decls) {
+        out.text("${indent}  ${d.property}: ${d.value};\n")
+    }
+    for (inner in r.inner) { writeRule(inner, out, indent + "  ") }
+    out.text("${indent}}\n")
+}

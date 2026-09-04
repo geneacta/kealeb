@@ -8,9 +8,9 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         3 241   the whole framework: HTTP, routing, the component
-                       tree, the renderer, JSON, WebSocket framing, the
-                       session hub and the diff
+  Keal         3 580   the whole framework: HTTP, routing, the component
+                       tree, the renderer, stylesheets, JSON, WebSocket
+                       framing, the scheduler, the session hub and the diff
   C              442   sockets, poll, byte blobs — one header, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
                        apply six kinds of patch
@@ -146,6 +146,19 @@ prefixed `kb-`, and following the operating system's dark mode — and
 rebuilds the tree, compares it with the last one, and sends the difference as
 at most six kinds of patch. Reconnects on its own. Sessions expire.
 
+**Stylesheets, written in Keal.** `rule(".hero").bg(accent).pad("3rem")` is a
+value, so it can be held in a list, returned from a function and built from a
+loop. `site.css(sheet([...]))` serves it at a URL naming its own contents,
+which is a one-year `immutable` cache that still changes the instant the
+stylesheet does. `site.script(...)` does the same for the JavaScript you should
+not need — a map widget, a chart — and says so.
+
+**Scheduled work.** `site.every(60000, { -> sweep() })` runs on the loop's own
+thread, between requests and never during one, so a job reads and writes what a
+handler reads and writes with nothing to synchronise. A job that throws is
+reported and keeps its schedule. The whole cost is one comparison per turn: the
+loop was already sleeping with a deadline.
+
 **The rest.** Static files with ETags and a 403 for any path that tries to
 climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
 no extensions. Cookies. Forms, including repeated fields.
@@ -177,8 +190,8 @@ tools/test.sh
 ```
 
 `units` holds the buffers, the encodings, the request parser, the router, the
-renderer, the diff and the asset rules to their answers — 145 checks, no
-network. `lifetime` builds an application, uses it, drops it, and reads what
+renderer, the diff, the stylesheet builder, the scheduler and the asset rules
+to their answers — 162 checks, no network. `lifetime` builds an application, uses it, drops it, and reads what
 `keal build --audit` says outlived it, which must be nothing. `cc` emits the
 backend's own C and compiles it under five `-Werror` names — one of which had
 been announcing a real miscompilation on every build until somebody read it.
@@ -209,6 +222,11 @@ The honest list.
   it does not yet do is make the move cheap: the diff walks children by index
   and does not look for one that moved, so inserting at the front still
   rewrites everything after it. Correct, and more work than it needs to be.
+* **A database.** Nothing at all — no driver, no SQL, no pool. This is the
+  largest thing missing, and it is missing on purpose until somebody decides
+  which database and accepts what that adds to the build: Keal reaches C, so
+  SQLite is four commands away and Postgres is a protocol nobody has written
+  here yet.
 * **TLS.** None. Put it behind a reverse proxy, which is where a terminator
   belongs anyway.
 * **Windows.** `runtime/kb.h` is POSIX. Winsock wants a different `poll` and a

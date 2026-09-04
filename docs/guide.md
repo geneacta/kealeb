@@ -204,6 +204,59 @@ shownWhen(count > 0, p("${count} waiting"))
 `submit(text)` is the other kind: a button that submits its form the ordinary
 way, for a page that works with no JavaScript at all.
 
+### Styles written in Keal
+
+`.style("color: red")` takes a string and always will — for one declaration on
+one node that is the shortest honest thing. For a stylesheet, `css.keal`
+builds one out of values:
+
+```keal
+val href = site.css(sheet([
+    vars(":root", [("--accent", "#2f6feb")]),
+    rule(".hero").bg("var(--accent)").fg("white").pad("3rem 2rem").radius("12px"),
+    rule(".hero h1").size("2.4rem").weight("700"),
+    media("(max-width: 600px)", [rule(".hero").pad("1.5rem")])
+]))
+```
+
+| | |
+|---|---|
+| `rule(selector)` | a rule; every setter answers it, so chain or don't |
+| `.set(property, value)` | the one that always works |
+| `.fg` `.bg` `.pad` `.margin` `.border` `.radius` `.font` `.size` `.weight` `.width` `.height` `.gap` `.display` `.flex` `.grid` `.shadow` `.opacity` `.cursor` `.position` `.overflow` `.transition` | the ones worth a name |
+| `media(query, rules)` · `supports(query, rules)` | at-rules; the query is the selector |
+| `vars(selector, pairs)` | custom properties, as one rule |
+| `sheet(rules)` | all of it, as text |
+
+It is not a CSS parser and does not validate: what you write goes out. What it
+buys is that **a rule is a value** — held in a list, returned from a function,
+built from a loop — and that the selectors and the numbers come from the same
+place as the rest of the program.
+
+`site.css(text)` serves it and links it from every page. The URL names the
+content — `/kealeb/asset-2b7c19f4e1.css` — so it is sent with a one-year
+`immutable` cache and still changes the instant the stylesheet does. It answers
+that URL, for a page that wants to reference it itself.
+
+### JavaScript, and when you need it
+
+```keal
+site.script("/* a map widget, a chart, an analytics tag */")
+site.linkStyle("https://fonts.example/thing.css")
+site.inHead("<link rel=\"icon\" href=\"/favicon.svg\">")
+```
+
+`script` is served and cached the same way, with `defer`. The framework's whole
+point is that you do not need it — the events and the rendering are Keal, on
+the server. It is here for the things that are genuinely the browser's. If you
+find yourself writing application logic in there, the framework has failed at
+something and it is worth saying which.
+
+**Order does not matter.** The title, the stylesheet and the assets are fixed
+when the server is built, which is after every registration, so a page
+registered before `site.css(...)` still gets the stylesheet. That was a real
+bug and this is the sentence that says it is not one any more.
+
 ### Escaping
 
 `txt` escapes. There is no flag to turn that off — `raw` is a different
@@ -491,8 +544,58 @@ proxy.
 Standard output is line-buffered from the moment the server starts, so a log
 piped to a file or a supervisor arrives as it is written.
 
-## 12. What the framework will not do
+## 12. Scheduled work
 
+```keal
+site.every(60000, { -> sweepExpiredCarts() })      // every minute
+site.after(5000, { -> warmTheCache() })            // once, five seconds in
+```
+
+A job runs on the loop's own thread, **between requests and never during
+one**, so it reads and writes whatever a handler reads and writes with nothing
+to synchronise — no lock, no queue, no copy. That is the same bargain the rest
+of the framework makes, and it has the same price: a job that blocks blocks
+the server.
+
+A job that takes longer than its interval simply runs less often than it
+asked. It is never started twice, and there is no queue of missed runs waiting
+to stampede when it finishes.
+
+A job that throws is reported on standard output and **keeps its schedule** —
+a batch that fails once an hour should still be tried next hour, and a server
+that dies because a scheduled job did is worse than the job failing.
+
+From a server you already hold, `every` and `after` answer the `Timer`, which
+can be `cancel()`led or told to run `soon()`:
+
+```keal
+val s = site.serverOn(8080)
+val beat = s.every(30000, { -> ping() })
+beat.soon()                                        // run it on the next turn
+beat.cancel()                                      // and never again
+```
+
+The cost is a comparison per turn of the loop and nothing else: the loop was
+already sleeping in `poll` with a deadline, and a timer is that deadline being
+chosen rather than assumed. A server with no jobs sleeps exactly as it did
+before.
+
+The rule about what a job may capture is the handler's rule: **a job must not
+hold the application.** `site.every(1000, { -> println(site.title) })` closes
+the ring that `tests/lifetime.keal` exists to keep open.
+
+There is no cron expression and no calendar. `every` counts milliseconds. A
+job that must run at 03:00 should check the clock itself — `utcNow()` is in
+the prelude — because a scheduler that understands time zones and daylight
+saving is a different program from this one, and pretending otherwise is how
+a batch runs twice in October.
+
+## 13. What the framework will not do
+
+* It will not talk to a database. There is no driver, no SQL, no connection
+  pool — nothing. A program that needs one calls out through Keal's C interop
+  today, and a first-class answer is the largest thing missing from this
+  framework.
 * It will not compress. It will not speak HTTP/2, or TLS.
 * It will not read a chunked request body — it answers **501** and says so.
 * It will not read `multipart/form-data`, so there are no file uploads yet.

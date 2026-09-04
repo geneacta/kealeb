@@ -10,6 +10,7 @@
 ///     a.run(8080)
 
 import "./bytes.keal"
+import "./css.keal"
 import "./ffi.keal"
 import "./http.keal"
 import "./live.keal"
@@ -19,6 +20,34 @@ import "./text.keal"
 import "./theme.keal"
 import "./ui.keal"
 import "./ws.keal"
+
+/// What every page is wrapped in.
+///
+/// A class rather than three fields on `App`, and the reason is a bug this
+/// had: a page handler used to read the title and the stylesheet **when the
+/// route was registered**, so `site.style = "/mine.css"` written after
+/// `site.page(...)` silently did nothing. The handlers capture this object
+/// once and read it per request, so the order of the lines in a program stops
+/// mattering. It is filled from the `App` when the server is built, which is
+/// after every registration and before every request.
+public class Chrome(
+    public var title: String,
+    public var style: String,
+    package var head: List<String>
+) {
+    package func markup(): String { return this.head.join("\n") }
+}
+
+/// A file the application serves out of memory, at a URL naming its contents.
+package class Asset(
+    package val url: String,
+    package val mime: String,
+    package val body: String,
+    package val tag: String
+)
+
+/// Something to run on a schedule, held until there is a server to run it.
+package class Job(package val ms: Int, package val once: Bool, package val run: () -> Unit)
 
 /// An application: a routing table, a title, and the defaults a page gets.
 public class App(
@@ -33,7 +62,12 @@ public class App(
     /// One line of log per request.
     public var log: Bool,
     /// Every live page this application has open.
-    public val live: Hub
+    public val live: Hub,
+    /// What wraps every page. Filled from the four fields above when the
+    /// server is built; read on every request.
+    public val chrome: Chrome,
+    package var assets: List<Asset>,
+    package var jobs: List<Job>
 ) {
     // ------------------------------------------------------------- routes
 
@@ -59,10 +93,11 @@ public class App(
         // Route and the Hub, and the audit calls it a cycle. Every
         // registration in this file has this shape for that reason, and
         // `tests/lifetime.keal` is what keeps it.
-        val t = title.isEmpty() ? this.title : title
-        val head = this.head
-        val style = this.style
-        this.router.get(path, { req -> html(doc(t, build(req), head, style)) })
+        val chrome = this.chrome
+        val own = title
+        this.router.get(path, { req ->
+            html(doc(own.isEmpty() ? chrome.title : own, build(req), chrome.markup(), chrome.style))
+        })
     }
 
     /// A page that also answers `POST` — the shape a form takes when it is
@@ -89,12 +124,75 @@ public class App(
     ///         ]) })
     ///     })
     public proc livePage(path: String, open: (Request) -> View, title: String = "") {
-        val t = title.isEmpty() ? this.title : title
-        val head = this.head
-        val style = this.style
+        val chrome = this.chrome
         val pages = this.live
-        this.router.get(path, { req -> html(pages.begin(open(req), t, head, style)) })
+        val own = title
+        this.router.get(path, { req ->
+            html(pages.begin(open(req), own.isEmpty() ? chrome.title : own,
+                             chrome.markup(), chrome.style))
+        })
     }
+
+    // -------------------------------------------------- styles and scripts
+
+    /// Serve a stylesheet the program built, and link it from every page.
+    ///
+    /// The URL names the content — `/kealeb/asset-2b7c19f4e1.css` — so it can
+    /// be cached for a year and still change the instant the stylesheet does.
+    /// Answers that URL, for a page that wants to reference it itself.
+    ///
+    ///     site.css(sheet([rule(".hero").bg("#2f6feb").fg("white")]))
+    public func css(text: String): String {
+        return this.asset(text, "css", "text/css; charset=utf-8",
+                          "<link rel=\"stylesheet\" href=\"%\">")
+    }
+
+    /// The same for JavaScript, loaded with `defer`.
+    ///
+    /// kealeb's whole point is that you do not need this — the events and the
+    /// rendering are Keal, on the server. It is here for the things that are
+    /// genuinely the browser's: a map widget, a chart library, an analytics
+    /// tag. If you find yourself writing application logic in here, the
+    /// framework has failed at something and it is worth saying which.
+    public func script(text: String): String {
+        return this.asset(text, "js", "text/javascript; charset=utf-8",
+                          "<script src=\"%\" defer></script>")
+    }
+
+    func asset(text: String, ext: String, mime: String, tag: String): String {
+        val id = hex(sha1(bufOf(text))).substring(0, 10)
+        val url = "/kealeb/asset-${id}.${ext}"
+        this.assets.add(Asset(url, mime, text, tag.replace("%", url)))
+        return url
+    }
+
+    /// Link a stylesheet this application does not serve — a CDN, or a file
+    /// under `files()`.
+    public proc linkStyle(href: String) {
+        this.head = "${this.head}<link rel=\"stylesheet\" href=\"${href}\">"
+    }
+
+    /// Put markup in every page's `<head>`. A favicon, a font, a meta tag.
+    public proc inHead(markup: String) { this.head = this.head + markup }
+
+    // ------------------------------------------------------------ the jobs
+
+    /// Run something every `ms`, for as long as the server runs.
+    ///
+    /// It runs on the loop's own thread, between requests and never during
+    /// one, so it reads and writes what a handler reads and writes with
+    /// nothing to synchronise — and a job that blocks blocks the server, for
+    /// the same reason and with the same remedy.
+    ///
+    ///     site.every(60000, { -> sweepExpired(sessions) })
+    ///
+    /// The same rule as a handler applies to what it captures: a job must not
+    /// hold the application, or the application never dies. `tests/lifetime.keal`
+    /// is what keeps that true here.
+    public proc every(ms: Int, job: () -> Unit) { this.jobs.add(Job(ms, false, job)) }
+
+    /// Run something once, `ms` from the moment the server starts.
+    public proc after(ms: Int, job: () -> Unit) { this.jobs.add(Job(ms, true, job)) }
 
     // ------------------------------------------------------------- assets
 
@@ -119,6 +217,9 @@ public class App(
     public func serverOn(port: Int, host: String = "127.0.0.1"): Server {
         this.mount()
         val s = server(this.router, port, host)
+        for (j in this.jobs) {
+            if (j.once) { s.after(j.ms, j.run) } else { s.every(j.ms, j.run) }
+        }
         s.log = this.log
         val pages = this.live
         pages.host = s
@@ -140,6 +241,25 @@ public class App(
     package proc mount() {
         if (this.mounted) { return }
         this.mounted = true
+
+        // The chrome is fixed here — after every registration, before every
+        // request — so a program may set its title, its stylesheet and its
+        // assets in any order it likes, and in any order relative to its
+        // pages.
+        this.chrome.title = this.title
+        this.chrome.style = this.style
+        if (not this.head.isEmpty()) { this.chrome.head.add(this.head) }
+        for (a in this.assets) {
+            val body = a.body
+            val mime = a.mime
+            this.chrome.head.add(a.tag)
+            // A URL that names its own contents can be cached for ever,
+            // because different contents are a different URL.
+            this.router.get(a.url, { req ->
+                text(body).type(mime).with("cache-control", "public, max-age=31536000, immutable")
+            })
+        }
+
         this.router.get("/kealeb/kealeb.css",
             { req -> text(stylesheet).type("text/css; charset=utf-8").with("cache-control", "max-age=300") })
         this.router.get("/kealeb/kealeb.js",
@@ -152,7 +272,11 @@ public class App(
 
 /// A new application, with the defaults a first program wants.
 public func app(title: String = "kealeb"): App {
-    return App(Router(), title, "", "/kealeb/kealeb.css", true, hub())
+    val head: List<String> = []
+    val assets: List<Asset> = []
+    val jobs: List<Job> = []
+    return App(Router(), title, "", "/kealeb/kealeb.css", true, hub(),
+               Chrome(title, "/kealeb/kealeb.css", head), assets, jobs)
 }
 
 /// Answer a browser asking to turn this connection into a WebSocket.

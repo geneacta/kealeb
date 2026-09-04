@@ -50,8 +50,21 @@ proc buildAndDrop() {
     site.file("/favicon.svg", "./favicon.svg")
     site.get("/plain", { req -> text("ok") })
 
+    // A stylesheet built in Keal, a script, and two scheduled jobs — each of
+    // which holds a closure the application holds, and so each of which could
+    // close the ring the same way a handler can.
+    site.css(sheet([rule(".x").fg("red")]))
+    site.script("console.log(1);")
+    site.inHead("<meta name=\"robots\" content=\"noindex\">")
+    var ran = 0
+    site.every(50, { -> ran = ran + 1 })
+    site.after(10, { -> ran = ran + 100 })
+
     val s = site.serverOn(0)
     s.handle = { req -> dispatch(site.router, req) }
+    assert(s.timerCount() == 2, "both jobs reached the server")
+    s.tick(30)
+    assert(ran >= 100, "and the one-shot ran (${ran})")
 
     // Exercised, not just built: a handler that never ran might be holding
     // something a handler that ran would have let go.

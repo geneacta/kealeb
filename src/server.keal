@@ -24,6 +24,29 @@ import "./ws.keal"
 package val modeHttp: Int = 0
 package val modeSocket: Int = 1
 
+/// Something to do later, or repeatedly.
+///
+/// The loop already sleeps in `poll` with a deadline; a timer is that deadline
+/// being chosen by something other than a guess. So this costs a comparison
+/// per turn and nothing else, and a server with no timers sleeps exactly as it
+/// did before.
+public class Timer(
+    /// How long between runs, in milliseconds.
+    public val everyMs: Int,
+    package var dueMs: Int,
+    /// Once and then gone, or over and over.
+    public val once: Bool,
+    package val run: () -> Unit,
+    package var cancelled: Bool
+) {
+    /// Stop it. A timer already running is not interrupted; it will not run
+    /// again. Cancelling one twice is not an error.
+    public proc cancel() { this.cancelled = true }
+
+    /// Run it on the next turn of the loop rather than when it was due.
+    public proc soon() { this.dueMs = monoMs() }
+}
+
 /// One live connection.
 public class Conn(
     public val fd: Int,
@@ -89,8 +112,32 @@ public class Server(
     public var onClose: (Int) -> Unit,
     package var listenFd: Int,
     package var conns: Map<Int, Conn>,
+    package var timers: List<Timer>,
     package var stopping: Bool
 ) {
+    /// Run `job` every `ms`, for as long as the server runs.
+    ///
+    /// It runs on the loop's own thread, between requests and never during
+    /// one, so it may read and write whatever a handler reads and writes with
+    /// nothing to synchronise. The price is the same as a handler's: a job
+    /// that blocks blocks the server, and a job that takes longer than its
+    /// interval simply runs less often than it asked — it is never started
+    /// twice.
+    public func every(ms: Int, job: () -> Unit): Timer {
+        val t = Timer(ms < 1 ? 1 : ms, monoMs() + ms, false, job, false)
+        this.timers.add(t)
+        return t
+    }
+
+    /// Run `job` once, `ms` from now.
+    public func after(ms: Int, job: () -> Unit): Timer {
+        val t = Timer(ms < 0 ? 0 : ms, monoMs() + ms, true, job, false)
+        this.timers.add(t)
+        return t
+    }
+
+    /// How many timers are installed.
+    public func timerCount(): Int { return this.timers.size }
     /// Bind, and answer the port actually taken. Called by `run`; call it
     /// yourself when you need the port before serving — a test does.
     public func open(): Int {
@@ -128,8 +175,19 @@ public class Server(
     /// One turn of the loop: wait up to `ms`, then move whatever is ready.
     /// Exposed because a test wants to drive the server by hand, and because
     /// a program that has its own loop should be able to host this one.
+    ///
+    /// A timer due sooner than `ms` shortens the wait, which is the whole of
+    /// how timers are implemented: the loop was already sleeping with a
+    /// deadline, and this is that deadline being chosen rather than assumed.
     public proc tick(ms: Int) {
-        val n = pollWait(ms)
+        var wait = ms
+        val now = monoMs()
+        for (t in this.timers) {
+            if (t.cancelled) { continue }
+            val left = t.dueMs - now
+            if (left < wait) { wait = left < 0 ? 0 : left }
+        }
+        val n = pollWait(wait)
         var i = 0
         while (i < n) {
             val fd = readyFd(i)
@@ -147,7 +205,37 @@ public class Server(
             }
             if ((ev band writable) != 0) { this.flush(c) }
         }
+        this.fire()
         this.sweep()
+    }
+
+    /// Run whatever fell due, and forget what will not run again.
+    ///
+    /// The list is copied first: a job may install a timer or cancel one, and
+    /// a list being walked is not a list to change. A job that throws is
+    /// reported and its timer keeps its schedule — a batch that fails once an
+    /// hour should still be tried next hour, and a server that dies because a
+    /// scheduled job did is worse than the job failing.
+    proc fire() {
+        if (this.timers.isEmpty()) { return }
+        val now = monoMs()
+        val due: List<Timer> = []
+        for (t in this.timers) {
+            if ((not t.cancelled) and (t.dueMs <= now)) { due.add(t) }
+        }
+        for (t in due) {
+            if (t.once) { t.cancelled = true } else { t.dueMs = monoMs() + t.everyMs }
+            try {
+                t.run()
+            } catch (e) {
+                println("kealeb: a timer threw: ${e}")
+            }
+        }
+        val living: List<Timer> = []
+        for (t in this.timers) {
+            if (not t.cancelled) { living.add(t) }
+        }
+        this.timers = living
     }
 
     /// Ask the loop to stop at the end of this turn.
@@ -440,8 +528,9 @@ public class Server(
 /// enough not to be met by accident and small enough to be a limit.
 public func server(router: Router, port: Int = 8080, host: String = "127.0.0.1"): Server {
     val conns: Map<Int, Conn> = {}
+    val timers: List<Timer> = []
     return Server(router, host, port, { r -> dispatch(router, r) }, true,
                   64 * 1024, 8 * 1024 * 1024, 30000, 1000,
                   { fd: Int, req: Request -> }, { fd: Int, message: String -> }, { fd: Int -> },
-                  -1, conns, false)
+                  -1, conns, timers, false)
 }

@@ -211,6 +211,59 @@ shownWhen(n > 0, p("${n} en attente"))
 `submit(texte)` est l'autre espèce : un bouton qui soumet son formulaire de
 façon ordinaire, pour une page qui fonctionne sans aucun JavaScript.
 
+### Des styles écrits en Keal
+
+`.style("color: red")` prend une chaîne et le fera toujours — pour une
+déclaration sur un nœud, c'est la chose la plus courte et la plus honnête. Pour
+une feuille entière, `css.keal` en construit une à partir de valeurs :
+
+```keal
+val href = site.css(sheet([
+    vars(":root", [("--accent", "#2f6feb")]),
+    rule(".hero").bg("var(--accent)").fg("white").pad("3rem 2rem").radius("12px"),
+    rule(".hero h1").size("2.4rem").weight("700"),
+    media("(max-width: 600px)", [rule(".hero").pad("1.5rem")])
+]))
+```
+
+| | |
+|---|---|
+| `rule(sélecteur)` | une règle ; chaque réglage la répond, donc on chaîne ou pas |
+| `.set(propriété, valeur)` | celui qui marche toujours |
+| `.fg` `.bg` `.pad` `.margin` `.border` `.radius` `.font` `.size` `.weight` `.width` `.height` `.gap` `.display` `.flex` `.grid` `.shadow` `.opacity` `.cursor` `.position` `.overflow` `.transition` | ceux qui méritent un nom |
+| `media(requête, règles)` · `supports(requête, règles)` | les at-rules ; la requête est le sélecteur |
+| `vars(sélecteur, paires)` | les propriétés personnalisées, en une règle |
+| `sheet(règles)` | le tout, en texte |
+
+Ce n'est pas un analyseur CSS et rien n'est validé : ce que vous écrivez sort.
+Ce que ça achète, c'est qu'**une règle est une valeur** — tenue dans une liste,
+rendue par une fonction, construite par une boucle — et que les sélecteurs et
+les nombres viennent du même endroit que le reste du programme.
+
+`site.css(texte)` la sert et la lie depuis chaque page. L'URL nomme le contenu
+— `/kealeb/asset-2b7c19f4e1.css` — donc elle part avec un cache d'un an
+`immutable` et change à l'instant où la feuille change. Elle répond cette URL,
+pour une page qui voudrait la référencer elle-même.
+
+### Le JavaScript, et quand il en faut
+
+```keal
+site.script("/* une carte, un graphique, une balise de mesure */")
+site.linkStyle("https://fonts.example/chose.css")
+site.inHead("<link rel=\"icon\" href=\"/favicon.svg\">")
+```
+
+`script` est servi et mis en cache de la même façon, avec `defer`. Tout l'intérêt
+du cadriciel est que vous n'en ayez pas besoin — les événements et le rendu sont
+du Keal, sur le serveur. C'est là pour ce qui appartient vraiment au navigateur.
+Si vous vous surprenez à y écrire de la logique applicative, le cadriciel a
+échoué sur quelque chose et il vaut la peine de dire sur quoi.
+
+**L'ordre n'a pas d'importance.** Le titre, la feuille de style et les
+ressources sont figés à la construction du serveur, donc après tous les
+enregistrements : une page déclarée avant `site.css(...)` reçoit quand même la
+feuille. C'était un vrai défaut, et cette phrase dit qu'il n'en est plus un.
+
 ### L'échappement
 
 `txt` échappe. Il n'y a pas de drapeau pour l'en empêcher — `raw` est une
@@ -507,8 +560,59 @@ La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc
 un journal redirigé vers un fichier ou un superviseur arrive au fil de
 l'écriture.
 
-## 12. Ce que le cadriciel ne fera pas
+## 12. Le travail programmé
 
+```keal
+site.every(60000, { -> viderLesPaniersExpires() })   // chaque minute
+site.after(5000, { -> prechaufferLeCache() })        // une fois, cinq secondes après
+```
+
+Une tâche s'exécute sur le fil de la boucle, **entre deux requêtes et jamais
+pendant une**, donc elle lit et écrit ce qu'un gestionnaire lit et écrit sans
+rien à synchroniser — pas de verrou, pas de file, pas de copie. C'est le même
+marché que le reste du cadriciel, et il a le même prix : une tâche qui bloque
+bloque le serveur.
+
+Une tâche plus longue que son intervalle tourne simplement moins souvent
+qu'elle ne l'a demandé. Elle n'est jamais lancée deux fois, et il n'y a pas de
+file d'exécutions manquées prête à se ruer quand elle finit.
+
+Une tâche qui lève une exception est signalée sur la sortie standard et
+**garde son rythme** — un traitement qui échoue une fois par heure doit quand
+même être retenté l'heure suivante, et un serveur qui meurt parce qu'un
+traitement a échoué est pire que le traitement qui échoue.
+
+Depuis un serveur qu'on tient déjà, `every` et `after` répondent le `Timer`,
+qu'on peut annuler (`cancel()`) ou faire tourner tout de suite (`soon()`) :
+
+```keal
+val s = site.serverOn(8080)
+val battement = s.every(30000, { -> ping() })
+battement.soon()                                     // au prochain tour
+battement.cancel()                                   // et plus jamais
+```
+
+Le coût est une comparaison par tour de boucle et rien d'autre : la boucle
+dormait déjà dans `poll` avec une échéance, et un minuteur est cette échéance
+choisie au lieu d'être supposée. Un serveur sans tâche dort exactement comme
+avant.
+
+La règle sur ce qu'une tâche peut capturer est celle des gestionnaires : **une
+tâche ne doit pas tenir l'application.** `site.every(1000, { -> println(site.title) })`
+ferme la boucle que `tests/lifetime.keal` existe pour garder ouverte.
+
+Il n'y a ni expression cron ni calendrier. `every` compte des millisecondes.
+Une tâche qui doit tourner à 03:00 doit regarder l'horloge elle-même —
+`utcNow()` est dans le prélude — parce qu'un ordonnanceur qui comprend les
+fuseaux et l'heure d'été est un autre programme que celui-ci, et prétendre le
+contraire est la façon dont un traitement tourne deux fois en octobre.
+
+## 13. Ce que le cadriciel ne fera pas
+
+* Il ne parlera à aucune base de données. Pas de pilote, pas de SQL, pas de
+  pool de connexions — rien. Un programme qui en a besoin sort par l'interop C
+  de Keal aujourd'hui, et une réponse de première classe est la plus grosse
+  chose qui manque à ce cadriciel.
 * Il ne compressera pas. Il ne parlera ni HTTP/2 ni TLS.
 * Il ne lira pas un corps de requête en morceaux — il répond **501** et le
   dit.

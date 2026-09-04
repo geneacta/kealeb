@@ -148,6 +148,31 @@ proc assets() {
     site.log = false
 }
 
+// §5 — styles written in Keal, and the assets that carry them
+proc styling() {
+    val href = site.css(sheet([
+        vars(":root", [("--accent", "#2f6feb")]),
+        rule(".hero").bg("var(--accent)").fg("white").pad("3rem 2rem").radius("12px"),
+        rule(".hero h1").size("2.4rem").weight("700"),
+        media("(max-width: 600px)", [rule(".hero").pad("1.5rem")]),
+        supports("(display: grid)", [rule(".cards").display("grid").grid("repeat(3, 1fr)").gap("1rem")])
+    ]))
+    val js = site.script("document.title = document.title;")
+    assert(href.startsWith("/kealeb/asset-"), "an asset is served at a URL naming its contents")
+    assert(js.endsWith(".js"), "and so is a script")
+    site.linkStyle("https://example.invalid/other.css")
+    site.inHead("<link rel=\"icon\" href=\"/favicon.svg\">")
+}
+
+// §11 — scheduled work
+proc scheduling() {
+    site.every(60000, { -> sweep() })
+    site.after(1000, { -> sweep() })
+}
+
+var swept = 0
+proc sweep() { swept = swept + 1 }
+
 // §9 — JSON
 func written(): String {
     val fields: Map<String, Json> = {}
@@ -173,6 +198,8 @@ pages()
 live()
 formPage()
 assets()
+styling()
+scheduling()
 readJson()
 
 // §10 — testing without a socket
