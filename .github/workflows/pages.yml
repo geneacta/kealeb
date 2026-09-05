@@ -1,9 +1,16 @@
 # Deploys site/ to GitHub Pages.
 #
-# `enablement: true` asks the action to switch Pages on rather than requiring
-# somebody to do it in Settings → Pages → Source first. It works with the
-# `pages: write` permission below; if the repository refuses it, that setting
-# is the manual equivalent and is the only part nobody here can do.
+# One-time setup, and it is the only part nobody here can do:
+#
+#     Settings → Pages → Source: "GitHub Actions"
+#
+# `enablement: true` on `configure-pages` was tried first, so that nobody would
+# have to. The repository refuses it — "Create Pages site failed. Error:
+# Resource not accessible by integration" — because switching Pages on is an
+# administrative act and a workflow token is not an administrator, whatever
+# permissions the workflow asks for. Until somebody does it, every run of this
+# fails on that step and deploys nothing, which is the right way for it to
+# fail.
 #
 # The site is generated from the repository's own documents by
 # `python3 site/build.py`, and the generated pages are committed — so what is
@@ -45,8 +52,6 @@ jobs:
           }
 
       - uses: actions/configure-pages@v6
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
