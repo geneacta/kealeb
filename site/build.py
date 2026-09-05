@@ -53,11 +53,21 @@ def fix_href(href, lang="en"):
     base = os.path.basename(href)
     if base.endswith(".md"):
         name = base[:-3]
-        if name in ("guide", "guide.fr"):
-            return "guide.html" + anchor
-        if name == "README":
-            return "index.html" + anchor
-        return "index.html" + anchor
+        # A document under `docs/` is meant to have a page here. One that is
+        # not in this table has no page, and the old fallback — send it to the
+        # index — is worse than a broken link: it resolves, so nothing catches
+        # it, and it points somewhere the text did not say. Keal's site had
+        # three of those in production, found by exactly this check. So the
+        # missing case stops the build instead.
+        pages = {"guide": "guide.html", "guide.fr": "guide.html", "README": "index.html"}
+        if name in pages:
+            return pages[name] + anchor
+        if href.replace("../", "").startswith("docs/"):
+            raise SystemExit(
+                "site/build.py: %s is under docs/ and has no page here.\n"
+                "  Either give it one, or take the link out. Sending it to the index\n"
+                "  would resolve and be wrong, which nothing would catch." % href)
+        return GITHUB + href.lstrip("./") + anchor
     if base.endswith(".keal"):
         return "examples.html#" + slug(base[:-5]) if "examples/" in href else GITHUB + href.lstrip("./")
     # Anything else still lives in the repository.
@@ -534,8 +544,8 @@ def main():
         print(os.path.relpath(path, ROOT))
     if broken:
         print()
-        for where, href in broken:
-            print("broken link: %s -> %s" % (where, href))
+        for where, href, why in broken:
+            print("%s -> %s (%s)" % (where, href, why))
         sys.exit(1)
 
 
@@ -548,19 +558,29 @@ def check_links(written):
     a build that produces a broken link.
     """
     broken = []
+    ids = {}
+    for path in written:
+        if path.endswith(".html"):
+            ids[os.path.normpath(path)] = set(
+                re.findall(r'id="([^"]+)"', open(path, encoding="utf-8").read()))
     for path in written:
         if not path.endswith(".html"):
             continue
         here = os.path.dirname(path)
         text = open(path, encoding="utf-8").read()
         for href in re.findall(r'(?:href|src)="([^"]+)"', text):
-            if href.startswith(("http://", "https://", "#", "mailto:", "data:")):
+            if href.startswith(("http://", "https://", "mailto:", "data:")):
                 continue
-            target = href.split("#", 1)[0]
-            if not target:
+            target, _, anchor = href.partition("#")
+            where = os.path.normpath(os.path.join(here, target)) if target else os.path.normpath(path)
+            if target and not os.path.exists(where):
+                broken.append((os.path.relpath(path, ROOT), href, "no such page"))
                 continue
-            if not os.path.exists(os.path.join(here, target)):
-                broken.append((os.path.relpath(path, ROOT), href))
+            # An anchor that is not there is a link that resolves and lands in
+            # the wrong place — the same failure as a wrong page, and the one a
+            # checker that only looks at filenames cannot see.
+            if anchor and where in ids and anchor not in ids[where]:
+                broken.append((os.path.relpath(path, ROOT), href, "no such anchor on that page"))
     return broken
 
 
