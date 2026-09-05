@@ -268,6 +268,7 @@ async function live(name, port) {
 }
 
 async function main() {
+  await stopping();
   await counting();
   // The notes example is the one with a keyed list, and it keeps its notes in
   // SQLite — so on a machine with no library to link, that half is skipped and
@@ -277,6 +278,32 @@ async function main() {
     return;
   }
   await moving();
+}
+
+// ------------------------------------------------------------- stopping
+
+// A server told to stop must stop, and must say nothing twice on the way.
+//
+// The second half is not decoration. Keal calls a `proc main` by itself once
+// the top level has run, so an example that both declares one and calls it
+// runs the whole program twice — which is invisible while the first run blocks
+// in the loop for ever, and becomes visible the moment the loop can end. That
+// is exactly what graceful shutdown made possible, and exactly how it was
+// found. Counting the "listening" lines is the check that keeps it found.
+async function stopping() {
+  const { server, port } = await start('counter');
+  let printed = '';
+  server.stdout.on('data', (d) => { printed += String(d); });
+  await (await fetch(`http://127.0.0.1:${port}/`)).text();
+
+  const ended = new Promise((resolve) => server.on('exit', (code, signal) => resolve({ code, signal })));
+  server.kill('SIGTERM');
+  const stopped = await Promise.race([ended, sleep(3000).then(() => null)]);
+
+  ok(stopped !== null, 'a server told to stop stops, rather than having to be killed');
+  if (stopped) same(String(stopped.code), '0', 'and exits saying nothing went wrong');
+  same(String((printed.match(/listening on/g) ?? []).length), '0',
+       'and started exactly once — a second "listening" means the program ran twice');
 }
 
 // ------------------------------------------------------- the counter page

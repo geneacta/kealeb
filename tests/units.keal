@@ -486,6 +486,69 @@ proc testKeyed() {
        "and so does a list only half of which is keyed")
 }
 
+// --------------------------------------------------------- what went wrong
+
+func asking(target: String, accept: String): Request {
+    val r = parseHead("GET ${target} HTTP/1.1\r\nHost: h\r\nAccept: ${accept}")
+    if (r == null) { panic("the test built a request that does not parse") }
+    return r
+}
+
+func explode(req: Request): Response { throw "on purpose" }
+
+proc testMistakes() {
+    ok(wantsHtml(asking("/", "text/html,application/xhtml+xml")), "a browser asks for html")
+    ok(not wantsHtml(asking("/", "application/json")), "and a program does not")
+    ok(not wantsHtml(asking("/", "*/*")), "nor does curl")
+
+    val site = app("mistakes")
+    site.log = false
+    site.onNotFound({ req -> column([h1("Nothing at ${req.path}")]) })
+    site.onError({ req -> column([h1("Sorry")]) })
+    site.get("/", { req -> text("home") })
+    site.get("/boom", { req -> explode(req) })
+    val s = site.serverOn(0)
+
+    val page = s.handle(asking("/nope", "text/html"))
+    sameInt(page.code, 404, "a browser still gets 404")
+    ok(page.text().contains("<h1>Nothing at /nope</h1>"), "but as a page")
+    ok(page.text().startsWith("<!doctype html>"), "a whole one, with the site's chrome")
+
+    val api = s.handle(asking("/nope", "application/json"))
+    sameInt(api.code, 404, "a program gets 404 too")
+    ok(not api.text().contains("<h1>"), "and a sentence it can read, not a page")
+
+    // The catch has to be inside the filters, or the 500 a handler throws
+    // never travels back out through them and `onError` cannot see it.
+    println("")
+    println("  (the next line is a handler throwing on purpose)")
+    val broke = s.handle(asking("/boom", "text/html"))
+    sameInt(broke.code, 500, "a handler that throws is a 500, not a dead server")
+    ok(broke.text().contains("<h1>Sorry</h1>"), "which onError replaced with a page")
+    println("  (and this one is the same handler, asked by something that is not a browser)")
+    val apiBroke = s.handle(asking("/boom", "*/*"))
+    sameInt(apiBroke.code, 500, "and a program gets 500")
+    ok(not apiBroke.text().contains("<h1>"), "as a sentence")
+    ok(not apiBroke.text().contains("on purpose"),
+       "and never what was thrown, which may hold anything the handler held")
+    print("  ")
+
+    same(s.handle(asking("/", "text/html")).text(), "home", "and an ordinary page is untouched")
+}
+
+// ---------------------------------------------------------- stopping well
+
+proc testStopping() {
+    val s = server(Router(), 0)
+    s.log = false
+    sameInt(s.drainMs, 5000, "there is a limit on how long a shutdown waits")
+    var stopped = 0
+    s.onStop = { -> stopped = stopped + 1 }
+    ok(stopped == 0, "and the stop handler has not run yet")
+    s.stop()
+    ok(s.connections() == 0, "a server with nothing open has nothing to drain")
+}
+
 // -------------------------------------------------------------- the filters
 
 proc testFilters() {
@@ -624,6 +687,8 @@ testLive()
 testCss()
 testKeyed()
 testUploads()
+testMistakes()
+testStopping()
 testFilters()
 testSchedule()
 testAssets()

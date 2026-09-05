@@ -110,6 +110,13 @@ public class Server(
     public var onMessage: (Int, String) -> Unit,
     /// A WebSocket went away, for any reason.
     public var onClose: (Int) -> Unit,
+    /// Run once when the server is stopping, before anything is closed. What
+    /// a program uses to write a last line, or flush something of its own.
+    public var onStop: () -> Unit,
+    /// How long to spend letting open connections finish once a stop has been
+    /// asked for, in milliseconds. After that they are closed anyway: a
+    /// shutdown that waits for ever is a process somebody has to kill.
+    public var drainMs: Int,
     package var listenFd: Int,
     package var conns: Map<Int, Conn>,
     package var timers: List<Timer>,
@@ -164,12 +171,64 @@ public class Server(
     /// handler calls it.
     public proc run() {
         this.open()
+        catchStop()
         if (this.log) {
             val shown = this.host.isEmpty() ? "0.0.0.0" : this.host
             println("kealeb listening on http://${shown}:${this.port}")
         }
-        while (not this.stopping) { this.tick(200) }
+        while (not this.stopping) {
+            this.tick(200)
+            if (stopAsked() == 1) { this.stopping = true }
+        }
+        this.drain()
         this.shut()
+    }
+
+    /// Stop taking new connections, and let the ones in hand finish.
+    ///
+    /// Closing the listener first is what makes this graceful rather than
+    /// merely delayed: a client that connects after this point is refused by
+    /// the kernel and can go to another instance, while a client already
+    /// waiting on a response gets it. Everything still open after `drainMs` is
+    /// closed anyway, because a shutdown that waits for ever is a process
+    /// somebody has to kill — and being killed is exactly what this exists to
+    /// avoid.
+    proc drain() {
+        try {
+            this.onStop()
+        } catch (e) {
+            println("kealeb: the stop handler threw: ${e}")
+        }
+        if (this.listenFd >= 0) {
+            unwatch(this.listenFd)
+            closeFd(this.listenFd)
+            this.listenFd = -1
+        }
+        if (this.conns.isEmpty()) { return }
+        if (this.log) { println("kealeb: stopping, ${this.conns.size} connection(s) to finish") }
+        val until = monoMs() + this.drainMs
+        while ((not this.conns.isEmpty()) and (monoMs() < until)) {
+            // Two kinds of connection, and only one of them is worth waiting
+            // for. One with bytes still unsent is in the middle of an answer,
+            // and finishing it is the whole point. One with nothing owed is a
+            // keep-alive sitting idle, or a socket with no news — it has
+            // nothing to finish, and waiting for it would mean waiting the
+            // full timeout every time, which is what this did before the test
+            // that stops a server measured how long it took.
+            val idle: List<Conn> = []
+            for (fd in this.conns.keys()) {
+                val c = this.conns.get(fd)
+                if (c == null) { continue }
+                c.closeWhenDrained = true
+                if (c.sent >= c.outBuf.len) { idle.add(c) }
+            }
+            for (c in idle) { this.drop(c) }
+            if (this.conns.isEmpty()) { break }
+            this.tick(20)
+        }
+        if (this.log and (not this.conns.isEmpty())) {
+            println("kealeb: ${this.conns.size} connection(s) did not finish in ${this.drainMs}ms; closing them")
+        }
     }
 
     /// One turn of the loop: wait up to `ms`, then move whatever is ready.
@@ -355,9 +414,14 @@ public class Server(
     }
 
     /// Run the handler, and turn anything it throws into a 500 rather than
-    /// into a dead server. What the handler was doing wrong still reaches
-    /// standard error, because a 500 with no explanation anywhere is how a
-    /// framework wastes an afternoon.
+    /// into a dead server.
+    ///
+    /// This is the backstop. An application built through `App` catches a
+    /// handler's throw closer in, around the router, so that its filters see
+    /// the 500 — what reaches here is something a *filter* threw, or a
+    /// `handle` somebody replaced wholesale. Either way the server does not
+    /// die for it, and what went wrong is on standard output rather than
+    /// nowhere.
     func answer(req: Request): Response {
         try {
             return this.handle(req)
@@ -532,5 +596,6 @@ public func server(router: Router, port: Int = 8080, host: String = "127.0.0.1")
     return Server(router, host, port, { r -> dispatch(router, r) }, true,
                   64 * 1024, 8 * 1024 * 1024, 30000, 1000,
                   { fd: Int, req: Request -> }, { fd: Int, message: String -> }, { fd: Int -> },
+                  { -> }, 5000,
                   -1, conns, timers, false)
 }

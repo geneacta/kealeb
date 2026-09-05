@@ -46,7 +46,7 @@ func asked(method: String, target: String, headers: String): Request {
 proc testPasswords() {
     val a = quick()
     val stored = a.hashPassword("correct horse battery staple")
-    ok(stored.startsWith(["pbkdf2-sha256", "1000", ""].join("$")),
+    ok(stored.startsWith("pbkdf2-sha256\$1000\$"),
        "the algorithm and the count are in the stored value")
     sameInt(stored.split("$").size, 4, "four fields")
     ok(a.checkPassword("correct horse battery staple", stored), "the right password verifies")
@@ -66,14 +66,15 @@ proc testPasswords() {
        "a stolen hash is useless without the pepper")
 
     ok(not a.checkPassword("x", "nonsense"), "a stored value that is not ours fails rather than throws")
-    // Built with `join` rather than written with a `$` in them: a `$` in a
-    // Keal string starts an interpolation, `${name}` and bare `$name` alike,
-    // so `"...$AAAA"` is a variable that does not exist rather than four
-    // letters. It is the reason `hashPassword` builds its own format the same
-    // way.
-    ok(not a.checkPassword("x", ["pbkdf2-sha256", "1000", "!!!", "!!!"].join("$")),
+    // `\$` is the literal one: a bare `$name` in a Keal string interpolates
+    // just as `${name}` does, so `"pbkdf2-sha256$0$AAAA"` reads `AAAA` as a
+    // variable. Here that was a compile error because nothing was called
+    // `AAAA` — which is the friendly version. The unfriendly one is a format
+    // holding `$user` inside a function where `user` exists: that compiles,
+    // and silently means something else.
+    ok(not a.checkPassword("x", "pbkdf2-sha256\$1000\$!!!\$!!!"),
        "and so does one with unreadable fields")
-    ok(not a.checkPassword("x", ["pbkdf2-sha256", "0", "AAAA", "AAAA"].join("$")),
+    ok(not a.checkPassword("x", "pbkdf2-sha256\$0\$AAAA\$AAAA"),
        "and one claiming no rounds at all")
 
     ok(not a.needsRehash(stored), "a hash at the current count is left alone")

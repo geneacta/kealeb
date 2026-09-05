@@ -251,6 +251,49 @@ public class App(
     /// Run something once, `ms` from the moment the server starts.
     public proc after(ms: Int, job: () -> Unit) { this.jobs.add(Job(ms, true, job)) }
 
+    // ------------------------------------------------------------ mistakes
+
+    /// What a visitor sees when nothing matched.
+    ///
+    /// A page, like every other page — wrapped in the document, with the
+    /// stylesheet, in the site's own shape. It replaces the answer **only when
+    /// the client asked for HTML**, so an API's 404 stays the short honest
+    /// thing a program can read.
+    ///
+    ///     site.onNotFound({ req -> column([h1("Nothing here"), link("/", "home")]) })
+    public proc onNotFound(build: (Request) -> Node) {
+        val chrome = this.chrome
+        this.use({ req, next ->
+            val res = next.on(req)
+            if ((res.code == 404) and wantsHtml(req)) {
+                html(doc("Not found", guarded(chrome, req, build(req)),
+                         chrome.markup(), chrome.style)).status(404)
+            } else {
+                res
+            }
+        })
+    }
+
+    /// The same for a handler that threw.
+    ///
+    /// It does not see what was thrown, and that is on purpose: whatever a
+    /// handler threw may hold a query, a path or a password, and a page is the
+    /// one place that must not carry it. The message is already on standard
+    /// output, where a person who can read the log can read it, and the log is
+    /// not a thing a stranger can read.
+    public proc onError(build: (Request) -> Node) {
+        val chrome = this.chrome
+        this.use({ req, next ->
+            val res = next.on(req)
+            if ((res.code == 500) and wantsHtml(req)) {
+                html(doc("Something went wrong", guarded(chrome, req, build(req)),
+                         chrome.markup(), chrome.style)).status(500)
+            } else {
+                res
+            }
+        })
+    }
+
     // ------------------------------------------------------------- assets
 
     /// Serve a directory. `/static/{path...}` under `prefix`, read from
@@ -282,7 +325,14 @@ public class App(
         // thing, each filter wraps what is already there, and `secure` — if it
         // is on — wraps the lot.
         val router = this.router
-        var chain: (Request) -> Response = { req -> dispatch(router, req) }
+        // The catch is here, around the router, and not further out — which
+        // matters more than it looks. A handler that throws unwinds every
+        // filter around it on the way, so a catch outside the filters would
+        // produce a 500 that no filter ever sees: `onError` could not replace
+        // it, and a logging filter would not record the one request most worth
+        // recording. Inside, a throw becomes an ordinary 500 that travels back
+        // out through the chain like any other answer.
+        var chain: (Request) -> Response = { req -> attempted(router, req) }
         var at = this.filters.size - 1
         while (at >= 0) {
             val filter = this.filters[at]
@@ -354,6 +404,31 @@ public func app(title: String = "kealeb"): App {
     val filters: List<(Request, Next) -> Response> = []
     return App(Router(), title, "", "/kealeb/kealeb.css", true, hub(),
                Chrome(title, "/kealeb/kealeb.css", head, null), assets, jobs, null, filters)
+}
+
+/// Run the router, and turn what a handler throws into a 500.
+///
+/// What was thrown goes to standard output and no further. It may hold a
+/// query, a path, a password — anything the handler was holding when it gave
+/// up — so it goes where a person who can read the log can read it, and the
+/// log is not a thing a stranger can read.
+package func attempted(router: Router, req: Request): Response {
+    try {
+        return dispatch(router, req)
+    } catch (e) {
+        println("kealeb: handler for ${req.method} ${req.path} threw: ${e}")
+        return serverError()
+    }
+}
+
+/// Did this client ask for a page, or for something a program reads?
+///
+/// A browser sends `text/html` in its `Accept`; `fetch` and `curl` send `*/*`
+/// or nothing. The difference decides whether an error is a page or a
+/// sentence, and getting it wrong means an API's error handling has to parse
+/// HTML.
+public func wantsHtml(req: Request): Bool {
+    return req.headerOr("accept", "").toLower().contains("text/html")
 }
 
 /// Put the CSRF token into every form on a page.

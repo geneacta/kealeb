@@ -36,7 +36,62 @@ programme qui en veut moins importe un seul module —
 `import "kealeb/src/http.keal"` amène la requête et la réponse, et rien
 d'autre.
 
-## 2. Les routes
+## 2. Utiliser kealeb depuis votre propre projet
+
+Le guide, jusqu'ici, suppose que vous êtes dans ce dépôt. Ce n'est pas
+obligatoire. kealeb est un paquet Keal, et un projet qui le veut le dit :
+
+```toml
+# keal.toml
+[package]
+name = "monprojet"
+version = "0.1.0"
+
+[dependencies]
+kealeb = { git = "https://github.com/geneacta/kealeb", tag = "v0.1.0" }
+```
+
+```sh
+keal fetch                                  # le met dans .keal/deps/kealeb
+.keal/deps/kealeb/tools/build.sh app.keal   # la sortie va dans *votre* build/
+```
+
+```keal
+import "dep:kealeb/kealeb.keal"
+```
+
+Le script de construction est la seule partie qui n'est pas simplement
+`keal build`, et à cause d'un seul drapeau : la surface C de kealeb est un
+en-tête, et il faut dire au compilateur où il est. Le lancer depuis la
+dépendance s'en charge, et pose l'exécutable chez vous plutôt que chez elle. Si
+vous préférez voir la commande entière :
+
+```sh
+keal build app.keal -I.keal/deps/kealeb/runtime
+```
+
+C'est tout. Ajoutez `-lsqlite3` quand le programme importe `src/sql.keal`, et
+rien sinon : kealeb ne se lie à aucune bibliothèque tant que vous ne demandez
+pas la base de données.
+
+### Une chose à savoir sur `main`
+
+Keal appelle `main` tout seul une fois le premier niveau exécuté. Un point
+d'entrée nommé `main` ne doit donc **pas** être appelé en plus :
+
+```keal
+proc main() {
+    site.run(8080)
+}
+                        // pas de `main()` ici — Keal s'en charge
+```
+
+Écrire les deux fait tourner tout le programme deux fois. C'est invisible tant
+que le serveur bloque pour toujours dans sa boucle, et ça apparaît dès que la
+boucle peut se terminer — ce que l'arrêt propre a rendu possible, et c'est
+comme ça que ça a été trouvé ici.
+
+## 3. Les routes
 
 Cinq verbes et un attrape-tout, chacun prenant un chemin et un gestionnaire :
 
@@ -87,7 +142,7 @@ un autre verbe est un **405** portant `Allow:` — la différence compte pour
 tous les clients, et un cadriciel incapable de la faire les oblige tous à
 deviner.
 
-## 3. La requête
+## 4. La requête
 
 ```keal
 site.post("/recherche", { req ->
@@ -119,7 +174,7 @@ l'occasion de changer la question. Là où le cadriciel doit ajouter quelque
 chose, il en construit une nouvelle : c'est ce que fait `withParams`, et elle
 partage le corps au lieu de le copier.
 
-## 4. La réponse
+## 5. La réponse
 
 ```keal
 html("<p>salut</p>")                     // text/html; charset=utf-8
@@ -154,7 +209,7 @@ peut pas être remplacé. Une longueur en désaccord avec son corps casse la
 requête *suivante* plutôt que celle-ci : c'est un bug dont il vaut la peine de
 refuser la possibilité.
 
-## 5. Les pages
+## 6. Les pages
 
 Une page est une fonction d'une requête vers un arbre de composants. Le
 cadriciel l'enveloppe dans un document et l'envoie.
@@ -281,7 +336,7 @@ site.style = ""                    // aucune
 site.head = "<link rel=\"icon\" href=\"/favicon.svg\">"
 ```
 
-## 6. Les formulaires sans JavaScript
+## 7. Les formulaires sans JavaScript
 
 ```keal
 site.page("/saluer", { req -> column([
@@ -352,7 +407,7 @@ défaut). Pas d'écriture au fil de l'eau, pas de `multipart/mixed`, et pas de
 `Content-Transfer-Encoding` autre que l'identité — un navigateur qui poste un
 formulaire n'envoie rien de tout cela.
 
-## 7. Les pages vivantes
+## 8. Les pages vivantes
 
 ```keal
 site.livePage("/", { req ->
@@ -457,7 +512,7 @@ mémoire utilisée. C'est le marché de Vaadin et c'est celui que kealeb passe ;
 si une page doit tenir cent mille onglets inactifs, ce doit être une `page` et
 non une `livePage`.
 
-## 8. Les fichiers statiques
+## 9. Les fichiers statiques
 
 ```keal
 site.files("/static", "./public")      // /static/a/b.css -> ./public/a/b.css
@@ -471,7 +526,7 @@ Tout chemin comportant un segment `..`, une barre initiale, une barre inverse
 ou un composant caché est un **403** — refusé, pas normalisé. Normaliser un
 chemin hostile, c'est ainsi qu'on sort d'un répertoire.
 
-## 9. JSON
+## 10. JSON
 
 ```keal
 val champs: Map<String, Json> = {}
@@ -497,7 +552,7 @@ chose à ignorer. `field(nom)` répond un `Json?`, ce qui n'est pas la même
 chose qu'un champ dont la valeur est `null` en JSON — et c'est pour cette
 différence qu'il est nullable.
 
-## 10. Les tests
+## 11. Les tests
 
 Un gestionnaire est une fonction, donc l'essentiel d'un site se teste sans
 aucun socket :
@@ -583,7 +638,7 @@ gestionnaires ne mentionnent jamais `site`.
 `weak` n'est pas la réponse ici : ce serait dire que l'application n'est que
 faiblement tenue par ses propres routes, ce que le programme ne veut pas dire.
 
-## 11. Les filtres
+## 12. Les filtres
 
 Un filtre enveloppe chaque requête. C'est une fonction ordinaire : pas de
 registre, pas d'annotation d'ordre, pas de configuration de chaîne — l'ordre
@@ -624,7 +679,7 @@ besoin dans un local d'abord.
 Quand une seule fonction suffit, `Server.handle` est toujours là, et le
 remplacer remplace tout, routage compris.
 
-## 12. La mise en service
+## 13. La mise en service
 
 ```keal
 site.run(8080)                        // 127.0.0.1 — ne peut surprendre personne
@@ -652,7 +707,62 @@ La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc
 un journal redirigé vers un fichier ou un superviseur arrive au fil de
 l'écriture.
 
-## 13. Le travail programmé
+### L'arrêt
+
+`SIGINT` et `SIGTERM` — Ctrl-C, et ce qu'envoie un gestionnaire de services —
+ne tuent plus le processus. Ils lui demandent de s'arrêter, et il le fait dans
+cet ordre :
+
+1. `onStop` s'exécute, si vous en avez posé un.
+2. L'écouteur se ferme, donc un client qui se connecte maintenant est refusé
+   par le noyau et peut aller ailleurs.
+3. Les connexions au milieu d'une réponse ont jusqu'à `drainMs` (cinq
+   secondes) pour finir. Celles qui ne doivent rien sont fermées tout de
+   suite — attendre un keep-alive inactif reviendrait à attendre le délai
+   entier à chaque fois.
+4. Ce qui reste ouvert après est fermé quand même, avec une ligne qui le dit.
+   Un arrêt qui attend pour toujours est un processus que quelqu'un doit tuer,
+   et être tué est précisément ce que ceci évite.
+
+```keal
+val s = site.serverOn(8080)
+s.onStop = { -> println("au revoir") }
+s.drainMs = 15000
+s.run()
+```
+
+Un gestionnaire ne peut pas être interrompu, donc une requête déjà en cours va
+toujours jusqu'au bout : le signal pose un drapeau et c'est la boucle qui le
+remarque — ce qui est aussi la seule chose qu'on ait le droit de faire dans un
+gestionnaire de signal.
+
+### Quand il n'y a rien, et quand quelque chose a cassé
+
+```keal
+site.onNotFound({ req -> column([h1("Rien à ${req.path}"), link("/", "accueil")]) })
+site.onError({ req -> column([h1("Quelque chose a mal tourné"), p("C'est noté.")]) })
+```
+
+Les deux construisent une page comme n'importe quelle autre — le document, la
+feuille de style, la forme du site — et les deux ne remplacent la réponse que
+**si le client a demandé du HTML**. Le 404 d'une API reste la phrase courte
+qu'un programme peut lire, parce qu'une gestion d'erreur qui doit analyser du
+HTML est une gestion d'erreur que personne n'écrit.
+
+`onError` ne reçoit pas ce qui a été levé, exprès. Ce qu'un gestionnaire a levé
+peut contenir une requête, un chemin, un mot de passe — tout ce qu'il tenait au
+moment d'abandonner — donc cela part sur la sortie standard, où quelqu'un qui
+peut lire le journal peut le lire, et un journal n'est pas une chose qu'un
+inconnu peut lire.
+
+Le `try` qui transforme une exception en 500 est **à l'intérieur** des filtres,
+autour du routeur. Ce n'est pas un détail : un gestionnaire qui lève déroule
+tous les filtres qui l'entourent en sortant, donc un `try` plus à l'extérieur
+produirait un 500 qu'aucun filtre ne voit — `onError` ne pourrait pas le
+remplacer, et un filtre de journalisation manquerait précisément la requête
+qu'il fallait noter.
+
+## 14. Le travail programmé
 
 ```keal
 site.every(60000, { -> viderLesPaniersExpires() })   // chaque minute
@@ -699,7 +809,7 @@ Une tâche qui doit tourner à 03:00 doit regarder l'horloge elle-même —
 fuseaux et l'heure d'été est un autre programme que celui-ci, et prétendre le
 contraire est la façon dont un traitement tourne deux fois en octobre.
 
-## 14. Une base de données
+## 15. Une base de données
 
 SQLite, et c'est un **second import et un second drapeau de liaison** — un
 programme qui n'ouvre jamais de base ne doit pas se lier à une :
@@ -825,7 +935,7 @@ aussi la seule chose qu'une page vivante ne peut pas deviner —
 `site.live.refreshAll()` dans un minuteur, pour qu'une page apprenne un
 changement qu'elle n'a pas causé.
 
-## 15. La sécurité
+## 16. La sécurité
 
 Quatre idées, et il n'y en a pas de cinquième. Un **mot de passe** stockable,
 une **session** qui est un cookie signé et rien sur le serveur, une **garde**
@@ -975,7 +1085,7 @@ POST-puis-redirection, que vous voulez de toute façon.
   sont les algorithmes. Ce n'est pas un audit, et ce guide ne prétendra pas que
   c'en est un.
 
-## 16. Ce que le cadriciel ne fera pas
+## 17. Ce que le cadriciel ne fera pas
 
 * Il ne parlera à aucune base de données autre que SQLite, et seulement si vous
   la demandez par un second import et `-lsqlite3`.

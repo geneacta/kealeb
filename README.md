@@ -8,11 +8,11 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         5 187   the whole framework: HTTP, routing, the component
+  Keal         5 333   the whole framework: HTTP, routing, the component
                        tree, the renderer, stylesheets, JSON, WebSocket
                        framing, the scheduler, the session hub, the diff, the
                        SQLite layer, and the hashing security rests on
-  C              687   sockets, poll, byte blobs, and the SQLite door —
+  C              721   sockets, poll, byte blobs, and the SQLite door —
                        two headers, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
                        apply six kinds of patch
@@ -203,9 +203,36 @@ handler would otherwise forget, and `p.filename` is never a path: `saveTo`
 takes one you chose, and `safeName()` is there for showing somebody what they
 sent.
 
+**Stopping when asked.** `SIGINT` and `SIGTERM` do not kill the process: the
+listener closes so a new client goes elsewhere, a request already being
+answered is finished, connections that owe nothing are closed at once, and
+whatever is left after `drainMs` is closed anyway with a line saying so.
+
 **The rest.** Static files with ETags and a 403 for any path that tries to
 climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
 no extensions. Cookies. Forms, including repeated fields.
+
+## Using it from your own project
+
+kealeb is a Keal package, so a project that wants it says so and stops caring
+where it lives:
+
+```toml
+[dependencies]
+kealeb = { git = "https://github.com/geneacta/kealeb", tag = "v0.1.0" }
+```
+
+```sh
+keal fetch
+.keal/deps/kealeb/tools/build.sh app.keal     # output lands in *your* build/
+```
+
+```keal
+import "dep:kealeb/kealeb.keal"
+```
+
+Nothing is linked unless you ask: `-lsqlite3` when the program imports
+`src/sql.keal`, and no library at all otherwise.
 
 ## Getting started
 
@@ -235,7 +262,7 @@ tools/test.sh
 
 `units` holds the buffers, the encodings, the request parser, the router, the
 renderer, the diff, the stylesheet builder, the scheduler and the asset rules
-to their answers — 206 checks, no network. `hash` holds SHA-256, HMAC and
+to their answers — 223 checks, no network. `hash` holds SHA-256, HMAC and
 PBKDF2 to the vectors their specifications published, and `auth` runs 65 checks
 over passwords, sessions, guards and the token, including the open redirect
 everybody forgets. `sql` runs 65 more against a real SQLite in memory, and says it is skipped rather than passing quietly when there

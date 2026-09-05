@@ -1,0 +1,12 @@
+# What a `dep:` import needs to find this, and what `keal fetch` reads when
+# somebody depends on it.
+#
+# kealeb depends on nothing. The one library it can reach — SQLite, through
+# `src/sql.keal` — is not a Keal package and is not fetched: it is linked, by a
+# program that asked for it, with `-lsqlite3`. A program that never imports
+# `src/sql.keal` never links against anything at all.
+[package]
+name = "kealeb"
+version = "0.1.0"
+
+[dependencies]

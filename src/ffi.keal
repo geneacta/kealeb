@@ -64,6 +64,12 @@ public extern proc ignoreSigpipe() = "kb_ignore_sigpipe"
 /// Line-buffer standard output, so a log piped to a file arrives as it is
 /// written rather than in four-kilobyte bursts.
 public extern proc stdoutLines() = "kb_stdout_lines"
+/// Notice `SIGINT` and `SIGTERM` rather than dying on them. The signal only
+/// sets a flag; the loop is what acts on it, which is the only thing that is
+/// safe to do from a handler.
+public extern proc catchStop() = "kb_catch_stop"
+/// Has anybody asked the process to stop?
+public extern func stopAsked(): Int = "kb_stop_asked"
 /// Bind and listen. `host` is a dotted IPv4 address, or "" for every
 /// interface. Answers the descriptor, or which step failed: -1 socket,
 /// -2 address, -3 bind, -4 listen.

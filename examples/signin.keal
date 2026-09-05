@@ -32,6 +32,9 @@ proc userPage(var site: App, a: Auth, var db: Db) {
     }))
 }
 
+/// Keal calls `main` by itself once the top level has run, so this is not
+/// called from anywhere: naming it `main` **and** calling it would run the
+/// whole program twice.
 proc main() {
     if (db == null) {
         println("could not open signin.db")
@@ -148,5 +151,3 @@ proc main() {
     // holds the port — including a previous run of itself.
     site.run(args().size > 0 ? (args()[0].toInt() ?: 8080) : 8080)
 }
-
-main()

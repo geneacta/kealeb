@@ -204,6 +204,31 @@ static inline char *kb_blob_text(int64_t h, int64_t off, int64_t len) {
  * the server's own start-up, and it is the whole of kealeb's signal policy. */
 static inline void kb_ignore_sigpipe(void) { signal(SIGPIPE, SIG_IGN); }
 
+/* Asking to stop, from outside.
+ *
+ * A handler is a Keal function and cannot be interrupted, so a signal cannot
+ * do anything but set a flag and let the loop notice — which is the only thing
+ * that is safe to do in a handler anyway. `sig_atomic_t` and nothing else: no
+ * allocation, no printing, no lock.
+ *
+ * Both signals mean the same thing here. `SIGTERM` is what a service manager
+ * sends and `SIGINT` is what a keyboard sends, and a server that finishes its
+ * sentence in one case should finish it in the other. */
+static volatile sig_atomic_t kb_asked_to_stop = 0;
+
+static void kb_note_signal(int sig) {
+    (void)sig;
+    kb_asked_to_stop = 1;
+}
+
+static inline void kb_catch_stop(void) {
+    signal(SIGINT, kb_note_signal);
+    signal(SIGTERM, kb_note_signal);
+}
+
+/* Has anybody asked? */
+static inline int64_t kb_stop_asked(void) { return (int64_t)kb_asked_to_stop; }
+
 /* Line-buffer standard output.
  *
  * C buffers a stream by blocks when it is not a terminal, so a server whose
@@ -212,7 +237,16 @@ static inline void kb_ignore_sigpipe(void) { signal(SIGPIPE, SIG_IGN); }
  * question it would have answered is not a log. Called once, next to the
  * signal above, and for the same reason: it is a property of being a server
  * rather than a decision any handler makes. */
-static inline void kb_stdout_lines(void) { setvbuf(stdout, NULL, _IOLBF, 0); }
+static inline void kb_stdout_lines(void) {
+    /* The flush is not tidiness. C says `setvbuf` must be called before any
+     * other operation on the stream, and this one is called when the server
+     * starts — by which time the program has usually printed something. What
+     * an implementation does with a buffer that is already half full is not
+     * written down anywhere, so it is emptied first and there is nothing left
+     * to be undefined about. */
+    fflush(stdout);
+    setvbuf(stdout, NULL, _IOLBF, 0);
+}
 
 static inline int kb_nonblocking(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);

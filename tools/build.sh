@@ -4,6 +4,12 @@
 #   tools/build.sh examples/hello.keal
 #   build/hello
 #
+# It also works from a project that depends on kealeb rather than contains it:
+#
+#   .keal/deps/kealeb/tools/build.sh app.keal
+#
+# The output lands in *your* build/, not the dependency's.
+#
 # Anything after the source file is passed to `keal build`. A program that
 # imports `src/sql.keal` needs the one library kealeb does not vendor:
 #
@@ -15,13 +21,18 @@
 # header, and gets out of the way.
 set -e
 
+# Where kealeb is, which is not necessarily where you are: this script works
+# from a project that has kealeb as a dependency, run as
+# `.keal/deps/kealeb/tools/build.sh app.keal`. The header comes from beside the
+# script; the output goes beside you.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+HERE=$(pwd)
 SRC=${1:?usage: tools/build.sh path/to/app.keal [extra keal build args...]}
 [ -f "$SRC" ] || { echo "no such file: $SRC" >&2; exit 1; }
 shift
 SRC=$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")
 NAME=$(basename "$SRC" .keal)
-OUT=$ROOT/build
+OUT=$HERE/build
 mkdir -p "$OUT"
 
 # The compiler: $KEAL wins, then a checked-out sibling, then the path.

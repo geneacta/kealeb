@@ -71,7 +71,11 @@ public class Auth(
     /// Storing the round count is what lets it be raised later without
     /// invalidating anything.
     ///
-    ///     pbkdf2-sha256$25000$<salt>$<hash>
+    ///     pbkdf2-sha256\$25000\$<salt>\$<hash>
+    ///
+    /// (`\$` because a bare `$name` in a Keal string interpolates just as
+    /// `${name}` does — the format is built with `join` below for the same
+    /// reason.)
     public func hashPassword(password: String): String {
         val salt = randomBytes(16)
         val digest = pbkdf2(this.keys.pepper + password, salt, this.rounds)

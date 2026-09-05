@@ -35,7 +35,61 @@ The import is the umbrella: everything in this guide is visible after it. A
 program that wants less can import one module — `import "kealeb/src/http.keal"`
 brings the request and the response and nothing else.
 
-## 2. Routes
+## 2. Using kealeb from your own project
+
+The guide so far assumes you are inside this repository. You do not have to be.
+kealeb is a Keal package, and a project that wants it says so:
+
+```toml
+# keal.toml
+[package]
+name = "myproject"
+version = "0.1.0"
+
+[dependencies]
+kealeb = { git = "https://github.com/geneacta/kealeb", tag = "v0.1.0" }
+```
+
+```sh
+keal fetch                                  # puts it in .keal/deps/kealeb
+.keal/deps/kealeb/tools/build.sh app.keal   # output lands in *your* build/
+```
+
+```keal
+import "dep:kealeb/kealeb.keal"
+```
+
+The build script is the one part that is not just `keal build`, and only
+because of one flag: kealeb's C surface is a header, and the compiler has to be
+told where it is. Running it from the dependency does that, and puts the
+executable in your directory rather than in kealeb's. If you would rather see
+the whole command:
+
+```sh
+keal build app.keal -I.keal/deps/kealeb/runtime
+```
+
+That is all of it. Add `-lsqlite3` when the program imports `src/sql.keal`, and
+nothing otherwise: kealeb links against no library at all unless you ask for
+the database.
+
+### One thing about `main`
+
+Keal calls a `main` by itself once the top level has run. So an entry point
+named `main` must **not** also be called:
+
+```keal
+proc main() {
+    site.run(8080)
+}
+                        // no `main()` here — Keal does that
+```
+
+Writing both runs the whole program twice. It is invisible while the server
+blocks in its loop for ever, and it appears the moment the loop can end — which
+is what graceful shutdown made possible, and how this was found here.
+
+## 3. Routes
 
 Five verbs and a catch-all, each taking a path and a handler:
 
@@ -82,7 +136,7 @@ A path that matches nothing is a 404. A path that matches under a different
 verb is a **405** carrying `Allow:` — the difference matters to every client
 and a framework that cannot tell them apart makes them all guess.
 
-## 3. The request
+## 4. The request
 
 ```keal
 site.post("/search", { req ->
@@ -113,7 +167,7 @@ the caller unless the signature says `var`, and a function type cannot say
 question. Where the framework needs to add something, it builds a new one:
 that is what `withParams` does, and it shares the body rather than copying it.
 
-## 4. The response
+## 5. The response
 
 ```keal
 html("<p>hi</p>")                        // text/html; charset=utf-8
@@ -146,7 +200,7 @@ statement, not a continuation.
 overridden. A length that disagrees with its body breaks the *next* request
 rather than this one, which is a bug worth refusing the chance to write.
 
-## 5. Pages
+## 6. Pages
 
 A page is a function from a request to a tree of components. The framework
 wraps it in a document and sends it.
@@ -274,7 +328,7 @@ site.style = ""                    // none at all
 site.head = "<link rel=\"icon\" href=\"/favicon.svg\">"
 ```
 
-## 6. Forms without JavaScript
+## 7. Forms without JavaScript
 
 ```keal
 site.page("/greet", { req -> column([
@@ -343,7 +397,7 @@ default). There is no streaming to disk, no `multipart/mixed`, and no
 `Content-Transfer-Encoding` but the identity one — a browser posting a form
 sends none of those.
 
-## 7. Live pages
+## 8. Live pages
 
 ```keal
 site.livePage("/", { req ->
@@ -445,7 +499,7 @@ is used. That is Vaadin's bargain and it is the one kealeb makes; if a page
 must scale to a hundred thousand idle tabs, it should be a `page`, not a
 `livePage`.
 
-## 8. Static files
+## 9. Static files
 
 ```keal
 site.files("/static", "./public")      // /static/a/b.css -> ./public/a/b.css
@@ -459,7 +513,7 @@ Any path with a `..` segment, a leading `/`, a backslash, or a dotfile
 component is a **403** — refused, not normalised. Normalising a hostile path
 is how a directory gets escaped.
 
-## 9. JSON
+## 10. JSON
 
 ```keal
 val fields: Map<String, Json> = {}
@@ -484,7 +538,7 @@ site.post("/orders", { req ->
 ignore. `field(name)` answers `Json?`, which is a different thing from a field
 whose value is JSON `null` — and the difference is why it is nullable.
 
-## 10. Testing
+## 11. Testing
 
 A handler is a function, so most of a site can be tested with no socket at
 all:
@@ -566,7 +620,7 @@ dropped — a test, or a program that serves more than one. That is exactly what
 `weak` is not the answer here. It would say the application is only weakly
 held by its own routes, which is not what the program means.
 
-## 11. Filters
+## 12. Filters
 
 A filter wraps every request. It is an ordinary function, and there is no
 registry, no ordering annotation and no chain configuration — the order is the
@@ -606,7 +660,7 @@ a local first.
 When one function is enough, `Server.handle` is still there and replacing it
 replaces everything, routing included.
 
-## 12. Running it
+## 13. Running it
 
 ```keal
 site.run(8080)                        // 127.0.0.1 — cannot surprise anybody
@@ -633,7 +687,57 @@ proxy.
 Standard output is line-buffered from the moment the server starts, so a log
 piped to a file or a supervisor arrives as it is written.
 
-## 13. Scheduled work
+### Stopping
+
+`SIGINT` and `SIGTERM` — Ctrl-C, and what a service manager sends — do not kill
+the process any more. They ask it to stop, and it does so in this order:
+
+1. `onStop` runs, if you set one.
+2. The listener closes, so a client that connects now is refused by the kernel
+   and can go somewhere else.
+3. Connections in the middle of an answer are given up to `drainMs` (five
+   seconds) to finish. Connections that owe nothing are closed at once —
+   waiting for an idle keep-alive would mean waiting the whole timeout every
+   time.
+4. Anything still open after that is closed anyway, with a line saying so. A
+   shutdown that waits for ever is a process somebody has to kill, and being
+   killed is what this exists to avoid.
+
+```keal
+val s = site.serverOn(8080)
+s.onStop = { -> println("goodbye") }
+s.drainMs = 15000
+s.run()
+```
+
+A handler cannot be interrupted, so a request already running always finishes:
+the signal sets a flag and the loop notices, which is also the only thing that
+is safe to do inside a signal handler.
+
+### When there is nothing there, and when something broke
+
+```keal
+site.onNotFound({ req -> column([h1("Nothing at ${req.path}"), link("/", "home")]) })
+site.onError({ req -> column([h1("Something went wrong"), p("It has been written down.")]) })
+```
+
+Both build a page like any other page — the document, the stylesheet, the
+site's own shape — and both replace the answer **only when the client asked for
+HTML**. An API's 404 stays the short sentence a program can read, because
+error handling that has to parse HTML is error handling nobody writes.
+
+`onError` is not told what was thrown, on purpose. Whatever a handler threw may
+hold a query, a path or a password — anything it was holding when it gave up —
+so it goes to standard output, where somebody who can read the log can read it,
+and a log is not a thing a stranger can read.
+
+The catch that turns a throw into a 500 sits **inside** the filters, around the
+router. That is not a detail: a handler that throws unwinds every filter around
+it on the way out, so a catch further out would produce a 500 that no filter
+ever sees — `onError` could not replace it, and a logging filter would miss the
+one request most worth recording.
+
+## 14. Scheduled work
 
 ```keal
 site.every(60000, { -> sweepExpiredCarts() })      // every minute
@@ -679,7 +783,7 @@ the prelude — because a scheduler that understands time zones and daylight
 saving is a different program from this one, and pretending otherwise is how
 a batch runs twice in October.
 
-## 14. A database
+## 15. A database
 
 SQLite, and it is a **second import and a second link flag** — a program that
 never opens a database must not link against one:
@@ -802,7 +906,7 @@ a database: stop it, start it again, the notes are there. It also shows the
 one thing a live page cannot work out for itself — `site.live.refreshAll()` in
 a timer, so a page learns about a change it did not cause.
 
-## 15. Security
+## 16. Security
 
 Four ideas, and there is no fifth. A **password** you can store, a **session**
 that is a signed cookie and nothing on the server, a **guard** that is an
@@ -946,7 +1050,7 @@ anyway.
   enough to say the algorithms are the algorithms. It is not an audit, and this
   guide will not pretend it is one.
 
-## 16. What the framework will not do
+## 17. What the framework will not do
 
 * It will not talk to any database but SQLite, and only when you ask for it
   with a second import and `-lsqlite3`.
