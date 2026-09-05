@@ -661,8 +661,6 @@ proc testCss() {
 
 // ------------------------------------------------------------- the schedule
 
-proc boom() { throw "on purpose" }
-
 proc testSchedule() {
     val s = server(Router(), 0)
     s.log = false
@@ -696,11 +694,11 @@ proc testSchedule() {
     println("")
     println("  (the next two lines are the framework reporting a job that throws,")
     println("   which is what this check is about)")
-    // Through a `proc` rather than `{ -> ... throw ... }`: a lambda whose last
-    // expression is a `throw` has type `Nothing`, which the C backend refuses
-    // by name. Nothing is broken by it; the shape just has to be written the
-    // other way round.
-    s.every(5, { -> angry = angry + 1; boom() })
+    // A lambda whose last expression is a `throw` — which had type `Nothing`
+    // and was refused by the C backend, so this went through a `proc` that
+    // threw instead. Keal compiles it since the morning of 2026-09-05, and the
+    // workaround is gone rather than left in place looking like a choice.
+    s.every(5, { -> angry = angry + 1; throw "on purpose" })
     s.tick(10)
     s.tick(10)
     ok(angry >= 2, "a job that throws is run again (${angry})")
