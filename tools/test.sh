@@ -3,24 +3,28 @@
 #
 #   tools/test.sh
 #
-# Six steps, and two of them are controls.
+# What this runs is what it prints — there is no list of the steps here, and
+# that is deliberate. There was one; it said "six steps", listed ten, and by
+# then there were thirteen. A comment that enumerates what the file does is a
+# second copy of the file, kept by hand, in the one place nothing checks.
 #
-#   guide     every snippet the guide promises, compiled
-#   sql       the database layer, against a real SQLite in memory
-#   gz        what the compressor produced, read by two decompressors
-#   band      the README's badges, recounted — and required not to have drifted
-#   site      the pages, rebuilt — and required not to differ from what is committed
-#   units     the buffers, encodings, parser, router, renderer and diff
-#   lifetime  an application built, used, dropped — and leaving nothing
-#   leaks     a cycle built on purpose, which the audit must still see
-#   cc        the C the backend emitted, read under five -Werror names,
-#             each of which is first handed a fault it must refuse
-#   client    the real client script, against a real server, over a socket
+# What is worth saying instead is what the steps are made of.
 #
-# `lifetime` and `cc` both assert negatives, and a negative goes green the
-# moment the instrument stops working. `leaks` and the fault files are what
-# say the instruments still work. A suite that only ever checks for the
-# absence of a thing needs something that checks it can still find one.
+# Most of them assert that something is so. Four assert that something is
+# **not** — no leak, no warning, no drift, no broken link — and a negative goes
+# green the moment the instrument stops working. So each of those has a
+# control that makes the instrument speak: `leaks` builds a reference cycle on
+# purpose, the `cc` step hands each of its five flags a fault it must refuse,
+# `band` and `site` are checked by moving the thing they measure and watching
+# them fail. A suite that only ever checks for the absence of a thing needs
+# something that checks it can still find one.
+#
+# And a word on which failures get a control at all, which Keal put better than
+# this file could: a defect that comes from a slope needs a check; a defect
+# that comes from inattention needs attention, and attention does not
+# transmit. Everything guarded here came from a slope — the obvious way to
+# write the thing produces it, which is why two people writing separately
+# arrive at the same one, and why "be careful" would have caught none of them.
 #
 # One property this file must keep, stated because it is easy to lose by
 # accident and impossible to notice when it goes: **every binary run here is
