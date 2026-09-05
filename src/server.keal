@@ -67,11 +67,15 @@ public class Conn(
     public var peer: String,
     /// A message being assembled out of continuation frames.
     package var partial: Buf,
-    package var partialOp: Int
+    package var partialOp: Int,
+    /// A file this connection is in the middle of sending: the open handle,
+    /// and how many bytes of it are still owed. Zero means none.
+    package var sending: Int,
+    package var sendLeft: Int
 )
 
 func newConn(fd: Int, peer: String): Conn {
-    return Conn(fd, buf(2048), buf(2048), 0, 0, false, modeHttp, monoMs(), 0, peer, buf(16), opText)
+    return Conn(fd, buf(2048), buf(2048), 0, 0, false, modeHttp, monoMs(), 0, peer, buf(16), opText, 0, 0)
 }
 
 /// The server.
@@ -227,7 +231,7 @@ public class Server(
                 val c = this.conns.get(fd)
                 if (c == null) { continue }
                 c.closeWhenDrained = true
-                if (c.sent >= c.outBuf.len) { idle.add(c) }
+                if ((c.sent >= c.outBuf.len) and (c.sending == 0)) { idle.add(c) }
             }
             for (c in idle) { this.drop(c) }
             if (this.conns.isEmpty()) { break }
@@ -411,6 +415,9 @@ public class Server(
             }
             if (this.compress) { squeeze(req, res, this.compressFrom) }
             writeResponse(res, c.outBuf, keep, req.method == "HEAD")
+            if (res.streams() and (req.method != "HEAD")) {
+                if (not this.beginSending(c, res)) { return false }
+            }
             if (this.log) {
                 println("${req.method} ${req.target} → ${res.code} ${res.length()}b ${monoMs() - started}ms ${c.peer}")
             }
@@ -523,10 +530,76 @@ public class Server(
         if (this.conns.containsKey(c.fd)) { this.drop(c) }
     }
 
+    /// Open the file a response named, and remember how much of it is owed.
+    ///
+    /// A file that will not open after the headers have already been written
+    /// is a response that cannot be completed and cannot be corrected — the
+    /// status line has gone. The connection is dropped, which is the only
+    /// honest thing left: a short body with a `Content-Length` that promised
+    /// more is a client that waits for ever.
+    func beginSending(var c: Conn, res: Response): Bool {
+        val h = openRead(res.filePath)
+        if (h == 0) {
+            println("kealeb: could not open ${res.filePath} after its headers went out; dropping")
+            this.drop(c)
+            return false
+        }
+        if (seekTo(h, res.fileFrom) != 1) {
+            closeRead(h)
+            println("kealeb: could not seek in ${res.filePath}; dropping")
+            this.drop(c)
+            return false
+        }
+        c.sending = h
+        c.sendLeft = res.fileLen
+        return true
+    }
+
+    /// Put the next piece of the file into the buffer.
+    ///
+    /// A quarter of a megabyte at a time: big enough that the read is the cost
+    /// rather than the call around it, small enough that a hundred connections
+    /// streaming at once is twenty-five megabytes and not the whole file each.
+    proc refill(var c: Conn) {
+        if ((c.sending == 0) or (c.sendLeft <= 0)) { return }
+        var want = 262144
+        if (want > c.sendLeft) { want = c.sendLeft }
+        val piece = buf(want)
+        piece.len = want
+        val got = readInto(c.sending, piece.handle(), 0, want)
+        if (got <= 0) {
+            // The file ended sooner than its size said. The length is already
+            // promised, so there is nothing to do but stop and let the
+            // connection close short — which a client will notice, and which is
+            // better than a loop that never ends.
+            println("kealeb: a file being sent ended ${c.sendLeft} bytes early")
+            this.stopSending(c)
+            c.closeWhenDrained = true
+            return
+        }
+        c.outBuf.raw(piece.handle(), 0, got)
+        c.sendLeft = c.sendLeft - got
+        if (c.sendLeft <= 0) { this.stopSending(c) }
+    }
+
+    proc stopSending(var c: Conn) {
+        if (c.sending != 0) { closeRead(c.sending) }
+        c.sending = 0
+        c.sendLeft = 0
+    }
+
     // ----------------------------------------------------------- outwards
 
     /// Push what is queued. Answers false when the connection was dropped.
     func flush(var c: Conn): Bool {
+        // Top the buffer up from the file before writing, and again whenever
+        // it empties: the socket's appetite is what paces the read, which is
+        // the whole of the back pressure.
+        if ((c.sending != 0) and (c.sent >= c.outBuf.len)) {
+            c.outBuf.clear()
+            c.sent = 0
+            this.refill(c)
+        }
         while (c.sent < c.outBuf.len) {
             val n = sendFrom(c.fd, c.outBuf.handle(), c.sent, c.outBuf.len - c.sent)
             if (n == again) {
@@ -536,9 +609,18 @@ public class Server(
             if (n <= 0) { this.drop(c); return false }
             c.sent = c.sent + n
             c.lastMs = monoMs()
+            if ((c.sending != 0) and (c.sent >= c.outBuf.len)) {
+                c.outBuf.clear()
+                c.sent = 0
+                this.refill(c)
+            }
         }
         c.outBuf.clear()
         c.sent = 0
+        if (c.sending != 0) {
+            watch(c.fd, readable bor writable)
+            return true
+        }
         if (c.closeWhenDrained) { this.drop(c); return false }
         watch(c.fd, readable)
         return true
@@ -553,7 +635,8 @@ public class Server(
         this.flush(c)
     }
 
-    proc drop(c: Conn) {
+    proc drop(var c: Conn) {
+        this.stopSending(c)
         val wasSocket = c.mode == modeSocket
         unwatch(c.fd)
         closeFd(c.fd)
@@ -624,6 +707,10 @@ package proc squeeze(req: Request, var res: Response, from: Int) {
     // A range names bytes of the resource as it is, so a compressed 206 would
     // be a slice of something the client did not ask for.
     if (res.code == 206) { return }
+    // A body that is a file is never in memory, so there is nothing here to
+    // compress without holding a DEFLATE stream per connection — and the
+    // things big enough to be streamed are the things already compressed.
+    if (res.streams()) { return }
     if (not worthCompressing(res.headers.get("content-type") ?: "")) { return }
     res.with("vary", "accept-encoding")
     if (res.headers.containsKey("content-encoding")) { return }

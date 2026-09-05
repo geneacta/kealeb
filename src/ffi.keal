@@ -125,5 +125,15 @@ public extern func fileRead(path: borrow String): Int = "kb_file_read"
 /// Write bytes to a file, replacing what was there. `writeFile` takes a
 /// String, and an upload is not text.
 public extern func fileWrite(path: borrow String, h: Int, off: Int, len: Int): Int = "kb_file_write"
+/// How big a file is, without reading it. -1 when there is no such file.
+public extern func fileSize(path: borrow String): Int = "kb_file_size"
+/// Open a file for reading in pieces. A handle, or 0.
+public extern func openRead(path: borrow String): Int = "kb_open_read"
+/// Move to a byte offset. 1 or 0.
+public extern func seekTo(h: Int, off: Int): Int = "kb_seek_to"
+/// Read the next piece into a blob. How many bytes, 0 at the end, or -1.
+public extern func readInto(h: Int, blob: Int, off: Int, len: Int): Int = "kb_read_into"
+/// Give the handle back.
+public extern proc closeRead(h: Int) = "kb_close_read"
 /// When a file last changed, in seconds since the epoch, or -1.
 public extern func fileMtime(path: borrow String): Int = "kb_file_mtime"

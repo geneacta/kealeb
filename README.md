@@ -8,12 +8,12 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         5 681   the whole framework: HTTP, routing, the component
+  Keal         5 918   the whole framework: HTTP, routing, the component
                        tree, the renderer, stylesheets, JSON, WebSocket
                        framing, the scheduler, the session hub, the diff, the
                        SQLite layer, gzip, and the hashing security
                        rests on
-  C              721   sockets, poll, byte blobs, and the SQLite door —
+  C              766   sockets, poll, byte blobs, and the SQLite door —
                        two headers, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
                        apply six kinds of patch
@@ -218,6 +218,13 @@ listener closes so a new client goes elsewhere, a request already being
 answered is finished, connections that owe nothing are closed at once, and
 whatever is left after `drainMs` is closed anyway with a line saying so.
 
+**Files bigger than the machine.** Under a megabyte a file is read into memory,
+where it can be compressed; above it the server opens it and sends it as the
+socket takes it, a quarter of a megabyte at a time. Serving the same
+hundred-megabyte file both ways: **3 MB resident streaming it, 235 MB reading
+it whole.** The socket's appetite paces the read, so a slow client is a slow
+read and not a queue.
+
 **The rest.** Static files with ETags, byte ranges (a 206 with
 `Content-Range`, a 416 when the slice is not there, and never compressed
 because a range names the resource as it is), and a 403 for any path that
@@ -292,9 +299,12 @@ The `cc` step hands each of its five flags a fault of its own and requires
 each to refuse it. Five flags that reject nothing pass everything. `client` is the one that matters: it builds the counter example,
 starts it, loads the page the server actually sends, runs the JavaScript the
 server actually serves against a DOM small enough to read, and clicks the
-button. The client is the only part of kealeb that does not run under `keal`,
-so leaving it unchecked would put the framework's whole promise on the one
-file nothing tests.
+button — and it drives the file server too, because the streaming write path
+has no other test: a file over the threshold goes out through the connection
+state machine a piece at a time, which is a place where an off-by-one shows up
+as a truncated download and nowhere else. The client is the only part of kealeb
+that does not run under `keal`, so leaving it unchecked would put the
+framework's whole promise on the one file nothing tests.
 
 It needs `node` for that, and says so rather than passing quietly when there
 is none.
@@ -306,10 +316,10 @@ The honest list.
 * **A better compression ratio.** `src/gzip.keal` emits fixed Huffman codes;
   RFC 1951's dynamic blocks would win another ten to fifteen per cent on text
   and are more code than everything else in that file put together.
-* **Streaming.** A request body is read whole into memory before a handler
-  sees it, bounded by `maxBody`; a response is built whole before any of it is
-  sent. Neither is a problem at the sizes a form has, and both are a problem
-  for a file somebody uploads by the gigabyte.
+* **Streaming a request body.** It is read whole into memory before a handler
+  sees it, bounded by `maxBody`. Not a problem at the sizes a form has, and a
+  problem for a file somebody uploads by the gigabyte. Responses stream; bodies
+  do not, yet.
 * **Any database but SQLite.** Postgres would be `libpq` through the same C
   door, or its wire protocol written in Keal — a project of its own either way.
 * **Audited cryptography.** `src/hash.keal` is hand-written and says so at the

@@ -269,10 +269,23 @@ public class Response(
     /// the map with the others.
     package var setCookies: List<String>,
     package var body: Buf,
+    /// When this is not empty, the body is that file rather than `body` — read
+    /// as it is sent, so something bigger than memory can still be served.
+    /// `fileLen` is how much of it, from `fileFrom`.
+    package var filePath: String,
+    package var fileFrom: Int,
+    package var fileLen: Int,
     /// Set when this response is not a response at all but the server's
     /// instruction to take the connection over — the WebSocket upgrade.
     package var upgrade: Bool
 ) {
+    /// How many bytes the body is, wherever it lives.
+    package func bodyLength(): Int {
+        return this.filePath.isEmpty() ? this.body.len : this.fileLen
+    }
+
+    /// Is the body a file the server should stream rather than a buffer?
+    package func streams(): Bool { return not this.filePath.isEmpty() }
     /// Set a header, replacing any of that name.
     public func with(name: String, value: String): Response {
         this.headers.set(headerKey(name), value)
@@ -302,7 +315,7 @@ public class Response(
     }
 
     /// How many bytes the body is.
-    public func length(): Int { return this.body.len }
+    public func length(): Int { return this.bodyLength() }
 
     /// The body as text — what a test asserts on.
     public func text(): String { return this.body.all() }
@@ -312,7 +325,26 @@ func responseOf(code: Int, contentType: String, body: Buf): Response {
     val headers: Map<String, String> = {}
     if (not contentType.isEmpty()) { headers.set("content-type", contentType) }
     val cookies: List<String> = []
-    return Response(code, headers, cookies, body, false)
+    return Response(code, headers, cookies, body, "", 0, 0, false)
+}
+
+/// A response whose body is a file, sent as it is read.
+///
+/// Nothing about the file is in memory: the server opens it, and each time the
+/// socket has room it reads the next piece. That is what lets a film be served
+/// from a machine with less memory than the film, and it is why this is a
+/// different function from `bytes` rather than a flag on it — a body that is a
+/// buffer and a body that is a file behave differently enough that the call
+/// site should say which.
+///
+/// It is not compressed. Compressing on the way out would mean holding a
+/// DEFLATE stream per connection, and the things big enough to want streaming
+/// are the things already compressed.
+public func fileBody(contentType: String, path: String, from: Int, len: Int): Response {
+    val headers: Map<String, String> = {}
+    if (not contentType.isEmpty()) { headers.set("content-type", contentType) }
+    val cookies: List<String> = []
+    return Response(200, headers, cookies, buf(16), path, from, len, false)
 }
 
 /// A response with a body of bytes and a media type of your choosing.
@@ -413,7 +445,7 @@ public func statusText(code: Int): String {
 /// response the bytes stop being HTTP.
 public func switching(headers: Map<String, String>): Response {
     val cookies: List<String> = []
-    return Response(101, headers, cookies, buf(16), true)
+    return Response(101, headers, cookies, buf(16), "", 0, 0, true)
 }
 
 /// Write a protocol switch. Separate from `writeResponse` because everything
@@ -441,8 +473,12 @@ public proc writeResponse(res: Response, out: Buf, keepAlive: Bool, headOnly: Bo
         out.text("${name}: ${res.headers.get(name) ?: ""}\r\n")
     }
     for (c in res.setCookies) { out.text("set-cookie: ${c}\r\n") }
-    out.text("content-length: ${res.body.len}\r\n")
+    out.text("content-length: ${res.bodyLength()}\r\n")
     out.text(keepAlive ? "connection: keep-alive\r\n" : "connection: close\r\n")
     out.text("\r\n")
-    if (not headOnly) { out.join(res.body, 0, res.body.len) }
+    // A file-backed body is not written here: the server opens it and sends it
+    // piece by piece as the socket takes them.
+    if (not headOnly) {
+        if (not res.streams()) { out.join(res.body, 0, res.body.len) }
+    }
 }

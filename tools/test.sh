@@ -254,6 +254,7 @@ if command -v node >/dev/null 2>&1; then
   # The examples this test drives, built here so a missing one is a build
   # failure with a compiler error rather than a spawn error with a stack.
   sh tools/build.sh examples/counter.keal >/dev/null
+  sh tools/build.sh examples/files.keal >/dev/null
   if [ "$HAVE_SQLITE" = "yes" ]; then
     sh tools/build.sh examples/notes.keal -lsqlite3 >/dev/null
     rm -f build/notes.db

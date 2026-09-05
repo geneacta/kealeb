@@ -17,7 +17,7 @@
 // browser lays the result out, which is what eyes are for.
 
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 let checks = 0;
@@ -178,8 +178,8 @@ function expected(message) {
 }
 
 /// Start one of the examples on a port it chooses, and wait until it says so.
-function start(name, within = 8000) {
-  const server = spawn(`build/${name}`, ['0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+function start(name, extra = [], within = 8000) {
+  const server = spawn(`build/${name}`, ['0', ...extra], { stdio: ['ignore', 'pipe', 'pipe'] });
   server.stderr.on('data', (d) => process.stderr.write(d));
   running.push(server);
   return new Promise((resolve, reject) => {
@@ -269,6 +269,7 @@ async function live(name, port) {
 
 async function main() {
   await stopping();
+  await serving();
   await counting();
   // The notes example is the one with a keyed list, and it keeps its notes in
   // SQLite — so on a machine with no library to link, that half is skipped and
@@ -278,6 +279,68 @@ async function main() {
     return;
   }
   await moving();
+}
+
+// ------------------------------------------------- files, whole and in part
+//
+// The streaming write path has no other test. A file over the threshold is
+// never in memory, so it goes out through the connection state machine a piece
+// at a time — a place where an off-by-one shows up as a truncated download and
+// nowhere else. So: ask for the whole thing and compare every byte, ask for a
+// slice in the middle and compare those, and ask for a slice that is not there.
+async function serving() {
+  const dir = 'build/served';
+  mkdirSync(dir, { recursive: true });
+  // Two files either side of the line: one read into memory and compressed,
+  // one opened and streamed.
+  const small = Buffer.from('<p>small enough to be held</p>\n'.repeat(200));
+  const big = Buffer.alloc(3 * 1024 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 7 + 3) & 0xff;
+  writeFileSync(`${dir}/small.html`, small);
+  writeFileSync(`${dir}/big.bin`, big);
+
+  const { port } = await start('files', [dir]);
+  const at = (path, headers) => fetch(`http://127.0.0.1:${port}${path}`, { headers });
+
+  const wholeSmall = Buffer.from(await (await at('/f/small.html')).arrayBuffer());
+  ok(wholeSmall.equals(small), 'a small file comes back exactly');
+
+  const held = await at('/f/small.html', { 'Accept-Encoding': 'gzip' });
+  same(held.headers.get('content-encoding'), 'gzip', 'and compressed, being text and in memory');
+
+  const wholeBig = Buffer.from(await (await at('/f/big.bin')).arrayBuffer());
+  same(String(wholeBig.length), String(big.length), 'a streamed file arrives whole');
+  ok(wholeBig.equals(big), 'and every byte of it is the byte it should be');
+
+  const streamed = await at('/f/big.bin', { 'Accept-Encoding': 'gzip' });
+  ok(streamed.headers.get('content-encoding') === null,
+     'a streamed file is not compressed, there being nothing in memory to compress');
+  same(streamed.headers.get('accept-ranges'), 'bytes', 'and it says ranges are welcome');
+
+  const slice = await at('/f/big.bin', { Range: 'bytes=1500000-1500015' });
+  same(String(slice.status), '206', 'a range is a 206');
+  same(slice.headers.get('content-range'), `bytes 1500000-1500015/${big.length}`,
+       'saying which bytes, of how many');
+  const got = Buffer.from(await slice.arrayBuffer());
+  ok(got.equals(big.subarray(1500000, 1500016)),
+     'and the bytes are the ones at that offset, not sixteen bytes from elsewhere');
+
+  const tail = await at('/f/big.bin', { Range: 'bytes=-16' });
+  const gotTail = Buffer.from(await tail.arrayBuffer());
+  ok(gotTail.equals(big.subarray(big.length - 16)), 'the last sixteen are the last sixteen');
+
+  const nowhere = await at('/f/big.bin', { Range: 'bytes=99999999-' });
+  same(String(nowhere.status), '416', 'a range past the end is a 416');
+  same(nowhere.headers.get('content-range'), `bytes */${big.length}`, 'saying how far it goes');
+
+  // Two at once, because the state machine keeps one file per connection and
+  // a shared handle would show up here and nowhere else.
+  const [a, b] = await Promise.all([
+    at('/f/big.bin').then((r) => r.arrayBuffer()),
+    at('/f/big.bin').then((r) => r.arrayBuffer()),
+  ]);
+  ok(Buffer.from(a).equals(big) && Buffer.from(b).equals(big),
+     'two downloads at once each get the whole file');
 }
 
 // ------------------------------------------------------------- stopping

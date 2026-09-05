@@ -11,3 +11,6 @@ build/
 # a signing secret an example made; never in git
 *.secret
 *.db
+
+# what the file-serving test generates
+build/served/

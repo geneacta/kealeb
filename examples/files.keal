@@ -1,0 +1,64 @@
+import "../kealeb.keal"
+
+/// Serving a directory — and what happens when what is in it is bigger than
+/// the machine.
+///
+///     tools/build.sh examples/files.keal && build/files 8080 ./public
+///
+/// Two lines do the work. Everything else in this file is the index page, so
+/// there is something to click.
+///
+/// A file under a megabyte is read into memory: it can be compressed, which is
+/// worth four or five times its size on a stylesheet, and holding it costs
+/// nothing. Above that the server opens it and sends it as the socket takes
+/// it, a quarter of a megabyte at a time. Measured on a hundred-megabyte file:
+/// **3 MB of memory streaming it, 235 MB reading it whole** — which is the
+/// difference between serving it and refusing to.
+///
+/// Both paths answer `Range`, so a video seeks and a download resumes.
+
+val site = app("kealeb — files")
+
+/// Keal calls `main` by itself once the top level has run, so this is not
+/// called from anywhere.
+proc main() {
+    val port = args().size > 0 ? (args()[0].toInt() ?: 8080) : 8080
+    val dir = args().size > 1 ? args()[1] : "./public"
+
+    site.files("/f", dir)
+
+    site.page("/", { req -> column([
+        h1("Files"),
+        p("Serving ${dir} at /f — with ETags, byte ranges, and gzip on what is worth it.").cls("kb-muted"),
+        card([
+            h3("What is in there"),
+            listing(dir)
+        ]),
+        p("A file over ${streamFrom / (1024 * 1024)} MB is streamed rather than read: the server holds a quarter of a megabyte of it, whatever its size.").cls("kb-muted")
+    ])})
+
+    site.run(port, "127.0.0.1")
+}
+
+func listing(dir: String): Node {
+    val names = listDir(dir)
+    if (names == null) { return p("There is no ${dir} to serve.").cls("kb-danger") }
+    if (names.isEmpty()) { return p("It is empty.").cls("kb-muted") }
+    val rows: List<Node> = []
+    for (name in names.sorted()) {
+        val size = fileSize("${dir}/${name}")
+        if (size < 0) { continue }
+        rows.add(row([
+            link("/f/${name}", name),
+            span(readable(size)).cls("kb-muted"),
+            span(size > streamFrom ? "streamed" : "in memory").cls("kb-muted")
+        ]).keyed(name))
+    }
+    return column(rows)
+}
+
+func readable(bytes: Int): String {
+    if (bytes < 1024) { return "${bytes} B" }
+    if (bytes < (1024 * 1024)) { return "${bytes / 1024} KB" }
+    return "${bytes / (1024 * 1024)} MB"
+}

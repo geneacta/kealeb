@@ -513,6 +513,32 @@ Any path with a `..` segment, a leading `/`, a backslash, or a dotfile
 component is a **403** — refused, not normalised. Normalising a hostile path
 is how a directory gets escaped.
 
+### Files bigger than the machine
+
+A file under a megabyte is read into memory; above that the server opens it and
+sends it as the socket takes it, a quarter of a megabyte at a time.
+
+```keal
+streamFrom = 4 * 1024 * 1024        // where the line is
+```
+
+The line is where two things swap places. A small file wants to be in memory:
+it can be compressed, which is worth four or five times its size on a
+stylesheet, and holding it costs nothing. A large one wants the opposite —
+compressing a film is pointless because a film is already compressed, and
+holding it is the difference between serving it and refusing to.
+
+Measured, serving the same hundred-megabyte file both ways:
+
+| | resident memory |
+|---|---|
+| streamed | **3 MB** |
+| read whole | **235 MB** |
+
+The socket's appetite is what paces the read, so a slow client is a slow read
+and not a queue: the server never holds more of the file than the piece it is
+writing. A streamed body is never compressed, and both paths answer `Range`.
+
 ### Ranges
 
 A static file is served with `Accept-Ranges: bytes`, and a client that asks for

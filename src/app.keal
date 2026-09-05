@@ -584,11 +584,22 @@ public func safePath(rel: String): Bool {
     return true
 }
 
+/// Below this many bytes a file is read into memory, and above it the server
+/// sends it as it reads it.
+///
+/// The line is where two things swap places. A small file wants to be in
+/// memory: it can be compressed, which is worth four or five times its size on
+/// a stylesheet, and holding it costs nothing. A large one wants the opposite:
+/// compressing a film is pointless because a film is already compressed, and
+/// holding it is the difference between serving one and refusing to.
+public var streamFrom: Int = 1024 * 1024
+
 /// Read a file and answer it, or answer why not.
 ///
 /// The ETag is the file's timestamp and size, which is what a cache needs and
 /// all a static file can honestly promise; a client that sends it back gets a
-/// 304 and no body.
+/// 304 and no body. A `Range` gets a 206, or a 416 when the slice is not
+/// there.
 public func serveFile(root: String, rel: String, ifNoneMatch: String = "",
                       range: String = ""): Response {
     if (not root.isEmpty()) {
@@ -597,51 +608,48 @@ public func serveFile(root: String, rel: String, ifNoneMatch: String = "",
     val path = root.isEmpty() ? rel : "${root}/${rel}"
     val stamp = fileMtime(path)
     if (stamp < 0) { return notFound("No such file: ${rel}") }
-    val tag = "\"${stamp}-${fileSizeOf(path)}\""
+    val size = fileSize(path)
+    if (size < 0) { return notFound("No such file: ${rel}") }
+
+    val tag = "\"${stamp}-${size}\""
     if (ifNoneMatch.contains(tag)) {
         return noContent().status(304).with("etag", tag)
     }
-    val h = fileRead(path)
-    if (h == 0) { return notFound("Could not read ${rel}").status(500) }
-    val size = blobSize(h)
 
-    // `Accept-Ranges` goes on every file, because a client asks for a range
-    // only when it has been told it may. Without it, a video seeks by
-    // downloading everything before the point it wanted.
+    var from = 0
+    var length = size
+    var partial = false
     val span = parseRange(range, size)
     if (span != null) {
         if (not span.satisfiable) {
-            blobFree(h)
             val no = notFound("That range is not in this file").status(416)
             return no.with("accept-ranges", "bytes").with("content-range", "bytes */${size}")
         }
-        val slice = buf(span.length() + 1)
-        slice.raw(h, span.from, span.length())
-        blobFree(h)
-        val part = bytes(mimeOf(path), slice).status(206)
-        part.with("accept-ranges", "bytes")
-        part.with("content-range", "bytes ${span.from}-${span.to}/${size}")
-        part.with("etag", tag)
-        part.with("last-modified", httpDate(stamp))
-        return part
+        from = span.from
+        length = span.length()
+        partial = true
     }
 
-    val body = buf(size)
-    body.raw(h, 0, size)
-    blobFree(h)
-    val whole = bytes(mimeOf(path), body)
-    whole.with("accept-ranges", "bytes")
-    whole.with("etag", tag)
-    whole.with("last-modified", httpDate(stamp))
-    return whole
-}
+    var res = notFound("")
+    if (length > streamFrom) {
+        // Big: the server opens it and sends it as the socket takes it, so
+        // nothing here holds it.
+        res = fileBody(mimeOf(path), path, from, length)
+    } else {
+        val h = fileRead(path)
+        if (h == 0) { return notFound("Could not read ${rel}").status(500) }
+        val body = buf(length + 1)
+        body.raw(h, from, length)
+        blobFree(h)
+        res = bytes(mimeOf(path), body)
+    }
 
-/// How big a file is, without reading it. Two `stat`s beat reading a file
-/// that a cache is about to be told it already has.
-func fileSizeOf(path: String): Int {
-    val h = fileRead(path)
-    if (h == 0) { return -1 }
-    val n = blobSize(h)
-    blobFree(h)
-    return n
+    if (partial) {
+        res.status(206)
+        res.with("content-range", "bytes ${from}-${(from + length) - 1}/${size}")
+    }
+    res.with("accept-ranges", "bytes")
+    res.with("etag", tag)
+    res.with("last-modified", httpDate(stamp))
+    return res
 }

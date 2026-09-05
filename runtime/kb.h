@@ -490,6 +490,51 @@ static inline int64_t kb_file_write(const char *path, int64_t h, int64_t off, in
     return (!bad && put == (size_t)len) ? 1 : 0;
 }
 
+/* How big a file is, without reading it.
+ *
+ * There was no such call, so the ETag computed the size by reading the whole
+ * file and throwing it away — which is fine for a stylesheet and absurd for a
+ * film. One `stat`. */
+static inline int64_t kb_file_size(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (int64_t)st.st_size;
+}
+
+/* ------------------------------------------------------ a file, in pieces */
+
+/* Open for reading. Answers a handle, or 0.
+ *
+ * A response whose body is a file does not hold the file in memory; it holds
+ * this, and the loop reads the next piece each time the socket has room. The
+ * handle rather than the path, because a path re-opened between pieces is a
+ * path that may have become a different file — and half of one file followed
+ * by half of another is a bug nobody would think to look for. */
+static inline int64_t kb_open_read(const char *path) {
+    FILE *f = fopen(path, "rb");
+    return (int64_t)(intptr_t)f;
+}
+
+static inline int64_t kb_seek_to(int64_t h, int64_t off) {
+    if (!h || off < 0) return 0;
+    return fseeko((FILE *)(intptr_t)h, (off_t)off, SEEK_SET) == 0;
+}
+
+/* Read up to `len` bytes into the blob at `off`. Answers how many, 0 at the
+ * end, or -1. */
+static inline int64_t kb_read_into(int64_t h, int64_t blob, int64_t off, int64_t len) {
+    if (!h || !blob || off < 0 || len <= 0) return -1;
+    int64_t n = kb_blob_size(blob);
+    if (off >= n) return -1;
+    if (len > n - off) len = n - off;
+    size_t got = fread((unsigned char *)blob + off, 1, (size_t)len, (FILE *)(intptr_t)h);
+    return (int64_t)got;
+}
+
+static inline void kb_close_read(int64_t h) {
+    if (h) fclose((FILE *)(intptr_t)h);
+}
+
 /* When a file last changed, in seconds since the epoch, or -1. An ETag is
  * cheaper than re-reading a file that has not moved. */
 static inline int64_t kb_file_mtime(const char *path) {

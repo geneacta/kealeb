@@ -526,6 +526,34 @@ Tout chemin comportant un segment `..`, une barre initiale, une barre inverse
 ou un composant caché est un **403** — refusé, pas normalisé. Normaliser un
 chemin hostile, c'est ainsi qu'on sort d'un répertoire.
 
+### Les fichiers plus gros que la machine
+
+Un fichier de moins d'un mégaoctet est lu en mémoire ; au-delà, le serveur
+l'ouvre et l'envoie au fur et à mesure que la socket le prend, par quarts de
+mégaoctet.
+
+```keal
+streamFrom = 4 * 1024 * 1024        // où passe la ligne
+```
+
+La ligne est l'endroit où deux choses échangent leur place. Un petit fichier
+veut être en mémoire : il peut être compressé, ce qui vaut quatre ou cinq fois
+sa taille sur une feuille de style, et le tenir ne coûte rien. Un gros veut
+l'inverse — compresser un film ne sert à rien puisqu'un film est déjà
+compressé, et le tenir est la différence entre le servir et refuser.
+
+Mesuré, en servant le même fichier de cent mégaoctets des deux façons :
+
+| | mémoire résidente |
+|---|---|
+| au fil de l'eau | **3 Mo** |
+| lu en entier | **235 Mo** |
+
+C'est l'appétit de la socket qui cadence la lecture, donc un client lent est
+une lecture lente et non une file d'attente : le serveur ne tient jamais plus
+du fichier que le morceau qu'il est en train d'écrire. Un corps envoyé au fil
+de l'eau n'est jamais compressé, et les deux chemins répondent à `Range`.
+
 ### Les intervalles d'octets
 
 Un fichier statique est servi avec `Accept-Ranges: bytes`, et un client qui en
