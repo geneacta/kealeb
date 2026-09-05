@@ -2,6 +2,7 @@
 """Builds the kealeb site, in English and in French.
 
     python3 site/build.py
+    python3 site/build.py --external    the same, plus following the links out
 
 Three pages in each language — the landing page, the guide, and the
 examples — generated from the documents in this repository, so the site
@@ -553,6 +554,8 @@ def main():
     written.append(write("en", "robots.txt",
                          "User-agent: *\nAllow: /\nSitemap: %ssitemap.xml\n" % BASE_URL))
     broken = check_links(written)
+    if "--external" in sys.argv:
+        broken += check_outward(written)
     for path in written:
         print(os.path.relpath(path, ROOT))
     if broken:
@@ -560,6 +563,62 @@ def main():
         for where, href, why in broken:
             print("%s -> %s (%s)" % (where, href, why))
         sys.exit(1)
+
+
+def check_outward(written):
+    """Follow the links that leave this site. Opt-in, and deliberately so.
+
+    A build must not need the network: one that does fails on a train, and a
+    suite that cannot run offline is a suite people stop running. But a link
+    that leaves does rot — the site it points at moves, or the anchor on it is
+    renamed — and nothing here would ever notice, because the ordinary check
+    skips anything absolute on purpose.
+
+    So: `python3 site/build.py --external`, by hand or on a schedule, and never
+    as part of `tools/test.sh`.
+    """
+    import urllib.error
+    import urllib.request
+
+    seen = {}
+    broken = []
+    for path in written:
+        if not path.endswith(".html"):
+            continue
+        text = open(path, encoding="utf-8").read()
+        # Tag by tag rather than href by href, because `rel="preconnect"` names
+        # an **origin** to warm up and not a document: fetching one answers 404
+        # by design. The first run of this reported twelve broken links and all
+        # twelve were those — the checker was wrong, not the site.
+        outward = set()
+        for tag in re.findall(r'<[^>]+>', text):
+            if 'rel="preconnect"' in tag or 'rel="dns-prefetch"' in tag:
+                continue
+            outward.update(re.findall(r'(?:href|src)="(https?://[^"]+)"', tag))
+        for href in sorted(outward):
+            url = href.split("#", 1)[0]
+            if url not in seen:
+                request = urllib.request.Request(url, method="HEAD",
+                                                 headers={"User-Agent": "kealeb-site-check"})
+                try:
+                    seen[url] = urllib.request.urlopen(request, timeout=15).getcode()
+                except urllib.error.HTTPError as e:
+                    # A HEAD is refused by some servers that answer a GET.
+                    seen[url] = e.code if e.code != 405 else _get(url)
+                except Exception as e:                       # network, DNS, TLS
+                    seen[url] = str(e)
+            if seen[url] != 200:
+                broken.append((os.path.relpath(path, ROOT), href, "answered %s" % seen[url]))
+    return broken
+
+
+def _get(url):
+    import urllib.request
+    request = urllib.request.Request(url, headers={"User-Agent": "kealeb-site-check"})
+    try:
+        return urllib.request.urlopen(request, timeout=15).getcode()
+    except Exception as e:
+        return str(e)
 
 
 def check_links(written):
