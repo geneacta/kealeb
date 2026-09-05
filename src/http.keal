@@ -7,6 +7,7 @@
 
 import "./bytes.keal"
 import "./text.keal"
+import "./upload.keal"
 
 // ---------------------------------------------------------------- request
 
@@ -77,6 +78,37 @@ public class Request(
 
     /// The same, keeping every value of a repeated field.
     public func formAll(): Map<String, List<String>> { return parseFormAll(this.body.all()) }
+
+    /// The parts of a `multipart/form-data` body — what a form with a file in
+    /// it posts. An empty list when the body is not one.
+    ///
+    /// It parses the body every time it is called, so a handler that wants
+    /// both a field and a file should call it once and keep the answer.
+    public func parts(): List<Part> {
+        return parseMultipart(this.body, this.headerOr("content-type", ""))
+    }
+
+    /// One part by name, or `null`.
+    public func part(name: String): Part? {
+        for (p in this.parts()) {
+            if (p.name == name) { return p }
+        }
+        return null
+    }
+
+    /// One part by name, but only when it is a file somebody actually chose —
+    /// a browser sends an empty part for a file input left alone, and telling
+    /// those apart is the check every upload handler would otherwise forget.
+    public func file(name: String): Part? {
+        val p = this.part(name)
+        if (p == null) { return null }
+        if (not p.isFile()) { return null }
+        if (p.size() == 0) { return null }
+        return p
+    }
+
+    /// Is this a form with files in it?
+    public func isMultipart(): Bool { return this.contentType() == "multipart/form-data" }
 
     /// The media type without its parameters: `text/html` from
     /// `text/html; charset=utf-8`.

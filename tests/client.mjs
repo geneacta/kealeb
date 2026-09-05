@@ -167,9 +167,8 @@ function pushText(at, text) {
 // anything holds it, including a previous run of itself that outlived its
 // kill. Reading the port out of the line the server prints is exact: there is
 // no window between choosing it and binding it.
-const server = spawn('build/counter', ['0'], { stdio: ['ignore', 'pipe', 'pipe'] });
-server.stderr.on('data', (d) => process.stderr.write(d));
-process.on('exit', () => server.kill());
+const running = [];
+process.on('exit', () => running.forEach((p) => p.kill()));
 
 // An error this file raised on purpose, whose message is the whole story.
 function expected(message) {
@@ -178,43 +177,51 @@ function expected(message) {
   return e;
 }
 
-function listeningPort(within) {
+/// Start one of the examples on a port it chooses, and wait until it says so.
+function start(name, within = 8000) {
+  const server = spawn(`build/${name}`, ['0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  server.stderr.on('data', (d) => process.stderr.write(d));
+  running.push(server);
   return new Promise((resolve, reject) => {
     let seen = '';
     const giveUp = setTimeout(() => {
       reject(expected(
-        `the counter example never said it was listening, within ${within}ms.\n` +
+        `the ${name} example never said it was listening, within ${within}ms.\n` +
         `    What it printed instead: ${seen ? JSON.stringify(seen) : '(nothing at all)'}\n` +
-        `    Run it by hand to see why: tools/build.sh examples/counter.keal && build/counter 0`));
+        `    Run it by hand to see why: tools/build.sh examples/${name}.keal && build/${name} 0`));
     }, within);
     server.stdout.on('data', (d) => {
       seen += String(d);
       const at = /listening on http:\/\/[^:]+:(\d+)/.exec(seen);
       if (at) {
         clearTimeout(giveUp);
-        resolve(Number(at[1]));
+        resolve({ server, port: Number(at[1]) });
       }
+    });
+    server.on('error', (e) => {
+      clearTimeout(giveUp);
+      reject(expected(
+        `build/${name} could not be started: ${e.code === 'ENOENT' ? 'it is not there' : e.message}.\n` +
+        `    tools/test.sh builds the examples this file drives; build it by hand with\n` +
+        `    tools/build.sh examples/${name}.keal${name === 'notes' ? ' -lsqlite3' : ''}`));
     });
     server.on('exit', (code) => {
       clearTimeout(giveUp);
       reject(expected(
-        `the counter example exited with status ${code} before it said it was listening.\n` +
-        `    Run it by hand to see why: tools/build.sh examples/counter.keal && build/counter 0`));
+        `the ${name} example exited with status ${code} before it said it was listening.\n` +
+        `    Run it by hand to see why: tools/build.sh examples/${name}.keal && build/${name} 0`));
     });
   });
 }
 
-async function main() {
-  const port = await listeningPort(8000);
+/// Load a live page and run the real client script against it, in a DOM small
+/// enough to read. Answers the mount point and what the client sent.
+async function live(name, port) {
   const page = await (await fetch(`http://127.0.0.1:${port}/`)).text();
-
   const session = /data-kb-session="([0-9a-f]+)"/.exec(page);
-  ok(session !== null, 'the page names a session');
-  if (!session) return;
-
+  if (!session) throw expected(`${name} served a page with no session id`);
   const mount = /<div id="kb-root" class="kb-page" data-kb-session="[0-9a-f]+">(.*)<\/div>\n<script/s.exec(page);
-  ok(mount !== null, 'the page has a mount point');
-  if (!mount) return;
+  if (!mount) throw expected(`${name} served a page with no mount point`);
 
   const root = new DomNode(1, 'div');
   root.setAttribute('id', 'kb-root');
@@ -223,32 +230,26 @@ async function main() {
   root.setAttribute('data-kb-session', session[1]);
   for (const c of parse(mount[1]).childNodes) root.appendChild(c);
 
-  // The document and window the client script expects, and nothing more.
   const document = {
     getElementById: (id) => (id === 'kb-root' ? root : null),
-    createElement: (name) => {
-      const el = new DomNode(1, name);
-      if (name === 'template') {
+    createElement: (tag) => {
+      const el = new DomNode(1, tag);
+      if (tag === 'template') {
         el.content = { get firstChild() { return el._parsed?.childNodes[0] ?? null; } };
-        Object.defineProperty(el, 'innerHTML', {
-          set(html) { el._parsed = parse(html); },
-        });
+        Object.defineProperty(el, 'innerHTML', { set(html) { el._parsed = parse(html); } });
       }
       return el;
     },
     body: new DomNode(1, 'body'),
   };
   const window = { addEventListener() {} };
-  const location = { protocol: 'http:', host: `127.0.0.1:${port}`, reload() { fail.push('the client reloaded'); } };
-
-  const source = clientSource();
-  ok(source.length > 500, 'the client script is served from the framework');
-  const run = new Function('document', 'window', 'location', 'WebSocket', 'setTimeout',
-                           'JSON', 'FormData', 'Math', source);
+  const location = {
+    protocol: 'http:', host: `127.0.0.1:${port}`,
+    reload() { fail.push(`the client reloaded on ${name}`); },
+  };
   const sent = [];
   class Socket {
     constructor(url) {
-      this.url = url;
       this.readyState = 0;
       this.real = new globalThis.WebSocket(url);
       this.real.onopen = () => { this.readyState = 1; this.onopen?.(); };
@@ -259,9 +260,31 @@ async function main() {
     send(text) { sent.push(text); this.real.send(text); }
     close() { this.real.close(); }
   }
+  const run = new Function('document', 'window', 'location', 'WebSocket', 'setTimeout',
+                           'JSON', 'FormData', 'Math', clientSource());
   run(document, window, location, Socket, setTimeout, JSON, FormData, Math);
-
   await sleep(400);
+  return { root, sent };
+}
+
+async function main() {
+  await counting();
+  // The notes example is the one with a keyed list, and it keeps its notes in
+  // SQLite — so on a machine with no library to link, that half is skipped and
+  // says so rather than failing at a missing binary.
+  if (process.env.KB_NO_SQLITE === '1') {
+    console.log('(the keyed-list checks want the notes example, which wants sqlite3 — skipped)');
+    return;
+  }
+  await moving();
+}
+
+// ------------------------------------------------------- the counter page
+
+async function counting() {
+  const { port } = await start('counter');
+  const { root, sent } = await live('counter', port);
+
   ok(sent.length === 0, 'the client says nothing until something happens');
 
   const heading = () => root.find((n) => n.nodeName === 'h1')[0].textContent;
@@ -285,8 +308,6 @@ async function main() {
   await sleep(250);
   same(heading(), 'Clicked 2 times', 'the other button goes the other way');
 
-  // Changing the step rewrites two labels and moves a `selected` attribute —
-  // four patches, of three different kinds, in one round trip.
   const chooser = root.find((n) => n.nodeName === 'select')[0];
   chooser.value = '5';
   root.dispatch('change', chooser);
@@ -295,8 +316,6 @@ async function main() {
   same(root.find((n) => n.nodeName === 'option' && n.getAttribute('selected'))[0].getAttribute('value'),
        '5', 'and the option that is chosen says so');
 
-  // Crossing nine grows a paragraph that was not in the tree at all: an empty
-  // placeholder replaced by a real node, which is the `r` patch.
   const before = root.find((n) => n.nodeName === 'p').length;
   root.dispatch('click', buttons[1]);
   root.dispatch('click', buttons[1]);
@@ -306,6 +325,75 @@ async function main() {
        'and the paragraph that only shows past nine appeared');
 
   same(sent.length, 7, 'seven events went out, one per thing done');
+}
+
+// --------------------------------------------- a keyed list, and the move
+
+// What keys are for, checked the only way that means anything: the row that
+// moved must be the *same DOM node* afterwards. A diff that rewrote it would
+// pass every check about text and fail this one — and in a browser that
+// difference is whether the caret, the focus and the scroll position stay with
+// the thing they belonged to or are silently handed to another row.
+async function moving() {
+  const { port } = await start('notes');
+  const { root } = await live('notes', port);
+
+  const textField = () => root.find((n) => n.nodeName === 'input' &&
+                                           n.getAttribute('type') === 'text')[0];
+  const addButton = () => root.find((n) => n.nodeName === 'button' &&
+                                           n.textContent === 'Add')[0];
+  ok(!!textField() && !!addButton(), 'the notes page has a field and an Add button');
+  if (!textField() || !addButton()) return;
+
+  const noteRows = () => root
+    .find((n) => n.nodeType === 1 && n.getAttribute('class') === 'kb-row')
+    .filter((n) => n.find((c) => c.nodeName === 'input' &&
+                                 c.getAttribute('type') === 'checkbox').length > 0);
+  const labels = () => noteRows().map((r) => r.find((c) => c.nodeName === 'span')[0]?.textContent ?? '');
+
+  const add = async (what) => {
+    const f = textField();
+    f.value = what;
+    root.dispatch('input', f);
+    await sleep(150);
+    root.dispatch('click', addButton());
+    await sleep(250);
+  };
+
+  const started = noteRows().length;
+  await add('alpha');
+  await add('beta');
+  same(noteRows().length, started + 2, 'two notes were added');
+  ok(labels().includes('alpha') && labels().includes('beta'), 'and both are on the page');
+
+  // Ticking one sends it below the others, because the query orders by
+  // `done` — so this is a reorder, which is what the move patch exists for.
+  const alphaRow = noteRows()[labels().indexOf('alpha')];
+  const betaRow = noteRows()[labels().indexOf('beta')];
+  const box = alphaRow.find((n) => n.nodeName === 'input' &&
+                                   n.getAttribute('type') === 'checkbox')[0];
+  box.checked = true;
+  root.dispatch('change', box);
+  await sleep(400);
+
+  const after = labels();
+  ok(after.indexOf('alpha') > after.indexOf('beta'),
+     `ticking a note moved it below the others (${after.join(', ')})`);
+  ok(noteRows().includes(alphaRow), 'and the row that moved is the same node, not a new one');
+  ok(noteRows().includes(betaRow), 'as is the one it moved past');
+
+  // Removing it takes that node away and leaves the other untouched.
+  root.dispatch('click', alphaRow.find((n) => n.nodeName === 'button')[0]);
+  await sleep(350);
+  ok(!labels().includes('alpha'), 'removing a note takes it off the page');
+  ok(noteRows().includes(betaRow), 'and leaves the other as the node it always was');
+
+  // This example keeps a file, so put it back as it was found.
+  while (labels().includes('beta')) {
+    const row = noteRows()[labels().indexOf('beta')];
+    root.dispatch('click', row.find((n) => n.nodeName === 'button')[0]);
+    await sleep(250);
+  }
 }
 
 function clientSource() {
@@ -327,7 +415,7 @@ try {
 } catch (e) {
   broke = e;
 }
-server.kill();
+running.forEach((p) => p.kill());
 
 if (broke) {
   console.log('could not run');

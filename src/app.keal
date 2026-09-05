@@ -43,6 +43,17 @@ public class Chrome(
     package func markup(): String { return this.head.join("\n") }
 }
 
+/// The rest of the chain, from inside a filter.
+///
+/// A class rather than a bare function so that `next.on(req)` reads as what it
+/// is, and so that there is somewhere to put the next thing a filter needs to
+/// know without changing every filter ever written.
+public class Next(package val rest: (Request) -> Response) {
+    /// Carry on. A filter that does not call this has answered by itself,
+    /// which is what a filter refusing a request looks like.
+    public func on(req: Request): Response { return this.rest(req) }
+}
+
 /// A file the application serves out of memory, at a URL naming its contents.
 package class Asset(
     package val url: String,
@@ -73,8 +84,31 @@ public class App(
     public val chrome: Chrome,
     package var assets: List<Asset>,
     package var jobs: List<Job>,
-    package var protection: Auth?
+    package var protection: Auth?,
+    package var filters: List<(Request, Next) -> Response>
 ) {
+    /// Put a filter around every request.
+    ///
+    ///     site.use({ req, next ->
+    ///         val started = monoMs()
+    ///         val res = next.on(req)
+    ///         println("${req.method} ${req.path} ${monoMs() - started}ms")
+    ///         res
+    ///     })
+    ///
+    /// Filters run in the order they were added, outermost first, and each one
+    /// decides whether to call `next.on(req)` at all — so refusing a request is
+    /// answering without calling it, and changing an answer is calling it and
+    /// adjusting what comes back.
+    ///
+    /// They sit **inside** what `secure` installs and **outside** the router,
+    /// so a filter never sees a request that failed its CSRF check, and
+    /// everything a filter answers still gets the response headers.
+    ///
+    /// A filter is held by the application, so the rule that holds everywhere
+    /// else holds here: it must not capture the application. Read what it needs
+    /// into a local first.
+    public proc use(filter: (Request, Next) -> Response) { this.filters.add(filter) }
     /// Switch on the four things every application should have and none should
     /// have to write.
     ///
@@ -244,10 +278,24 @@ public class App(
             if (j.once) { s.after(j.ms, j.run) } else { s.every(j.ms, j.run) }
         }
         s.log = this.log
+        // The chain, built from the inside out: the router is the innermost
+        // thing, each filter wraps what is already there, and `secure` — if it
+        // is on — wraps the lot.
+        val router = this.router
+        var chain: (Request) -> Response = { req -> dispatch(router, req) }
+        var at = this.filters.size - 1
+        while (at >= 0) {
+            val filter = this.filters[at]
+            val inner = chain
+            chain = { req -> filter(req, Next(inner)) }
+            at = at - 1
+        }
         val a = this.protection
-        if (a != null) {
-            val router = this.router
-            s.handle = { req -> defended(a, router, req) }
+        if (a == null) {
+            s.handle = chain
+        } else {
+            val guarded = chain
+            s.handle = { req -> defended(a, guarded, req) }
         }
         val pages = this.live
         pages.host = s
@@ -303,8 +351,9 @@ public func app(title: String = "kealeb"): App {
     val head: List<String> = []
     val assets: List<Asset> = []
     val jobs: List<Job> = []
+    val filters: List<(Request, Next) -> Response> = []
     return App(Router(), title, "", "/kealeb/kealeb.css", true, hub(),
-               Chrome(title, "/kealeb/kealeb.css", head, null), assets, jobs, null)
+               Chrome(title, "/kealeb/kealeb.css", head, null), assets, jobs, null, filters)
 }
 
 /// Put the CSRF token into every form on a page.
@@ -353,7 +402,7 @@ package func hardened(res: Response): Response {
 }
 
 /// Everything `secure` installs, on the way in and on the way out.
-package func defended(a: Auth, router: Router, req: Request): Response {
+package func defended(a: Auth, inner: (Request) -> Response, req: Request): Response {
     val changes = ((req.method == "POST") or (req.method == "PUT")) or
                   ((req.method == "PATCH") or (req.method == "DELETE"))
     if (changes and (not a.csrfOk(req))) {
@@ -361,7 +410,7 @@ package func defended(a: Auth, router: Router, req: Request): Response {
         // the token; anything that does not, learns nothing from the answer.
         return notFound("This request did not come from this site").status(403)
     }
-    return hardened(dispatch(router, req))
+    return hardened(inner(req))
 }
 
 /// Answer a browser asking to turn this connection into a WebSocket.

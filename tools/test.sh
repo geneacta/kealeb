@@ -204,9 +204,15 @@ echo "$proven flags each refuse their own fault, and $emitted translation units 
 # against a real server in the one runtime that can run it. No node, no check —
 # and the suite says so rather than passing quietly.
 if command -v node >/dev/null 2>&1; then
+  # The examples this test drives, built here so a missing one is a build
+  # failure with a compiler error rather than a spawn error with a stack.
   sh tools/build.sh examples/counter.keal >/dev/null
+  if [ "$HAVE_SQLITE" = "yes" ]; then
+    sh tools/build.sh examples/notes.keal -lsqlite3 >/dev/null
+    rm -f build/notes.db
+  fi
   printf '%-8s ' "client"
-  node tests/client.mjs
+  KB_NO_SQLITE=$([ "$HAVE_SQLITE" = "yes" ] && echo 0 || echo 1) node tests/client.mjs
 else
   echo "client   skipped — node not found, so the browser client is unchecked"
 fi

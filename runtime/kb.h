@@ -439,6 +439,23 @@ static inline int64_t kb_file_read(const char *path) {
     return h;
 }
 
+/* Write bytes to a file, replacing whatever was there. Answers 1, or 0.
+ *
+ * `writeFile` in the prelude takes a `String`, and an upload is not text. This
+ * is the other half of `kb_file_read`, and it exists for exactly one caller:
+ * a `Part` being saved. */
+static inline int64_t kb_file_write(const char *path, int64_t h, int64_t off, int64_t len) {
+    if (!path || !h || off < 0 || len < 0) return 0;
+    int64_t n = kb_blob_size(h);
+    if (off > n) return 0;
+    if (len > n - off) len = n - off;
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t put = len > 0 ? fwrite((const unsigned char *)h + off, 1, (size_t)len, f) : 0;
+    int bad = fclose(f) != 0;
+    return (!bad && put == (size_t)len) ? 1 : 0;
+}
+
 /* When a file last changed, in seconds since the epoch, or -1. An ETag is
  * cheaper than re-reading a file that has not moved. */
 static inline int64_t kb_file_mtime(const char *path) {

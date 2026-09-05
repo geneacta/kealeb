@@ -8,11 +8,11 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         4 777   the whole framework: HTTP, routing, the component
+  Keal         5 187   the whole framework: HTTP, routing, the component
                        tree, the renderer, stylesheets, JSON, WebSocket
                        framing, the scheduler, the session hub, the diff, the
                        SQLite layer, and the hashing security rests on
-  C              670   sockets, poll, byte blobs, and the SQLite door —
+  C              687   sockets, poll, byte blobs, and the SQLite door —
                        two headers, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
                        apply six kinds of patch
@@ -146,7 +146,10 @@ prefixed `kb-`, and following the operating system's dark mode — and
 
 **Live pages.** The tree stays on the server; an event runs a handler,
 rebuilds the tree, compares it with the last one, and sends the difference as
-at most six kinds of patch. Reconnects on its own. Sessions expire.
+at most seven kinds of patch. `.keyed(id)` matches children by what they are
+rather than where they are, so a row that moved is **moved** — one patch — and
+the browser node that moved is the same node, keeping the caret and the focus
+that belonged to it. Reconnects on its own. Sessions expire.
 
 **Stylesheets, written in Keal.** `rule(".hero").bg(accent).pad("3rem")` is a
 value, so it can be held in a list, returned from a function and built from a
@@ -187,6 +190,19 @@ than hope you do not ask: this server is one thread, hashing blocks it, 25 000
 costs a measured 95 ms, and OWASP's 600 000 would let ten logins be a denial of
 service. The pepper and a rate limiter carry what the rounds do not.
 
+**Filters.** `site.use({ req, next -> … })`, outermost first, unwinding the
+other way. No registry, no ordering annotation, no chain configuration: a
+filter that never calls `next.on(req)` has answered by itself, and that is what
+refusing looks like. They sit inside what `secure` installs and outside the
+router.
+
+**Uploads.** `multipart/form-data`, parsed on the bytes rather than the text —
+a PNG through a UTF-8 validator is a corrupted PNG. `req.file(name)` answers
+null for a file input nobody chose a file for, which is the check every upload
+handler would otherwise forget, and `p.filename` is never a path: `saveTo`
+takes one you chose, and `safeName()` is there for showing somebody what they
+sent.
+
 **The rest.** Static files with ETags and a 403 for any path that tries to
 climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
 no extensions. Cookies. Forms, including repeated fields.
@@ -219,7 +235,7 @@ tools/test.sh
 
 `units` holds the buffers, the encodings, the request parser, the router, the
 renderer, the diff, the stylesheet builder, the scheduler and the asset rules
-to their answers — 161 checks, no network. `hash` holds SHA-256, HMAC and
+to their answers — 206 checks, no network. `hash` holds SHA-256, HMAC and
 PBKDF2 to the vectors their specifications published, and `auth` runs 65 checks
 over passwords, sessions, guards and the token, including the open redirect
 everybody forgets. `sql` runs 65 more against a real SQLite in memory, and says it is skipped rather than passing quietly when there
@@ -248,12 +264,10 @@ is none.
 
 The honest list.
 
-* **Moving a node cheaply.** `.keyed(id)` already decides *identity* — a node
-  whose key changed is rebuilt rather than patched, so a list that shifted up
-  by one does not hand the browser's caret and focus to a different row. What
-  it does not yet do is make the move cheap: the diff walks children by index
-  and does not look for one that moved, so inserting at the front still
-  rewrites everything after it. Correct, and more work than it needs to be.
+* **Streaming.** A request body is read whole into memory before a handler
+  sees it, bounded by `maxBody`; a response is built whole before any of it is
+  sent. Neither is a problem at the sizes a form has, and both are a problem
+  for a file somebody uploads by the gigabyte.
 * **Any database but SQLite.** Postgres would be `libpq` through the same C
   door, or its wire protocol written in Keal — a project of its own either way.
 * **Audited cryptography.** `src/hash.keal` is hand-written and says so at the

@@ -173,6 +173,39 @@ proc scheduling() {
 var swept = 0
 proc sweep() { swept = swept + 1 }
 
+// §11 — filters
+proc filtering() {
+    site.use({ req, next ->
+        val started = monoMs()
+        val res = next.on(req)
+        println("${req.method} ${req.path} ${res.code} ${monoMs() - started}ms")
+        res
+    })
+    site.use({ req, next ->
+        if (req.path.startsWith("/nothing-here")) { notFound() } else { next.on(req) }
+    })
+}
+
+// §6 — files
+proc uploading() {
+    site.post("/upload", { req ->
+        val doc = req.file("doc")
+        if (doc == null) {
+            badRequest("choose a file")
+        } else {
+            val where = "build/${epochS()}-${doc.safeName()}"
+            assert(doc.size() >= 0, "a part knows its size")
+            assert(not doc.kind.isEmpty() or true, "and what it claims to be")
+            redirect("/", 303)
+        }
+    })
+    site.post("/upload2", { req ->
+        val everything = req.parts()
+        val one = req.part("title")
+        text("${req.isMultipart()} ${everything.size} ${one == null}")
+    })
+}
+
 // §9 — JSON
 func written(): String {
     val fields: Map<String, Json> = {}
@@ -200,6 +233,8 @@ formPage()
 assets()
 styling()
 scheduling()
+filtering()
+uploading()
 readJson()
 
 // §10 — testing without a socket

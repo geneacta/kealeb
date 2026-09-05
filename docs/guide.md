@@ -294,6 +294,55 @@ site.post("/greet", { req ->
 Nothing here needs a socket, a session or a script. It is the whole of
 [`examples/hello.keal`](../examples/hello.keal)'s third route.
 
+### Files
+
+A form that carries a file posts `multipart/form-data`, which is bytes and not
+text — a PNG through a UTF-8 validator is a corrupted PNG. So it is parsed on
+the bytes, and a `Part` hands you either.
+
+```keal
+site.post("/upload", { req ->
+    val doc = req.file("doc")
+    if (doc == null) {
+        badRequest("choose a file")
+    } else {
+        doc.saveTo("uploads/${epochS()}-${doc.safeName()}")
+        redirect("/", 303)
+    }
+})
+```
+
+| | |
+|---|---|
+| `req.isMultipart()` | is this that kind of body? |
+| `req.parts()` | every part, in order |
+| `req.part(name)` | one part, or null |
+| `req.file(name)` | one part, but **only** when a file was actually chosen |
+| `p.name` `p.filename` `p.kind` | the field name, the client's file name, the claimed media type |
+| `p.text()` `p.bytes()` `p.size()` `p.isFile()` | |
+| `p.saveTo(path)` · `p.safeName(fallback)` | |
+
+Three things worth knowing before writing the handler:
+
+* **`file` and `part` are different questions.** A browser sends a part for a
+  file input even when nobody chose a file — empty name, no content. `part`
+  gives you that; `file` gives you `null`, which is the check every upload
+  handler would otherwise forget.
+* **`kind` is a claim.** The client says what it likes. A server that trusts it
+  is a server that serves a script as an image.
+* **`filename` is never a path.** It is what a stranger typed, `../../etc/`
+  included. `saveTo` takes a path *you* chose, and there is deliberately no
+  `save(intoDirectory)` — that function would have to decide what to do with
+  the client's name, and every wrong answer is a directory somebody escaped.
+  `safeName()` strips it down to letters, digits and `. - _`, and it is still
+  a name a stranger chose: use it to show somebody what they uploaded, and
+  generate the name you store.
+
+The whole body is in memory, bounded by the server's `maxBody` (8 MB by
+default). There is no streaming to disk, no `multipart/mixed`, and no
+`Content-Transfer-Encoding` but the identity one — a browser posting a form
+sends none of those.
+
 ## 7. Live pages
 
 ```keal
@@ -517,7 +566,47 @@ dropped — a test, or a program that serves more than one. That is exactly what
 `weak` is not the answer here. It would say the application is only weakly
 held by its own routes, which is not what the program means.
 
-## 11. Running it
+## 11. Filters
+
+A filter wraps every request. It is an ordinary function, and there is no
+registry, no ordering annotation and no chain configuration — the order is the
+order you wrote them in.
+
+```keal
+site.use({ req, next ->
+    val started = monoMs()
+    val res = next.on(req)
+    println("${req.method} ${req.path} ${res.code} ${monoMs() - started}ms")
+    res
+})
+```
+
+They run **outermost first** and unwind in the other direction, so the first
+one added is the last one to see the answer. A filter that never calls
+`next.on(req)` has answered by itself, which is what refusing looks like:
+
+```keal
+site.use({ req, next ->
+    if (req.path.startsWith("/admin") and (not a.signedIn(req))) {
+        redirect("/sign-in", 303)
+    } else {
+        next.on(req)
+    }
+})
+```
+
+Filters sit **inside** what `secure` installs and **outside** the router: a
+filter never sees a request that failed its CSRF check, and everything a filter
+answers still gets the response headers.
+
+A filter is held by the application, so the rule that holds everywhere else
+holds here — a filter must not capture the application. Read what it needs into
+a local first.
+
+When one function is enough, `Server.handle` is still there and replacing it
+replaces everything, routing included.
+
+## 12. Running it
 
 ```keal
 site.run(8080)                        // 127.0.0.1 — cannot surprise anybody
@@ -544,7 +633,7 @@ proxy.
 Standard output is line-buffered from the moment the server starts, so a log
 piped to a file or a supervisor arrives as it is written.
 
-## 12. Scheduled work
+## 13. Scheduled work
 
 ```keal
 site.every(60000, { -> sweepExpiredCarts() })      // every minute
@@ -590,7 +679,7 @@ the prelude — because a scheduler that understands time zones and daylight
 saving is a different program from this one, and pretending otherwise is how
 a batch runs twice in October.
 
-## 13. A database
+## 14. A database
 
 SQLite, and it is a **second import and a second link flag** — a program that
 never opens a database must not link against one:
@@ -713,7 +802,7 @@ a database: stop it, start it again, the notes are there. It also shows the
 one thing a live page cannot work out for itself — `site.live.refreshAll()` in
 a timer, so a page learns about a change it did not cause.
 
-## 14. Security
+## 15. Security
 
 Four ideas, and there is no fifth. A **password** you can store, a **session**
 that is a signed cookie and nothing on the server, a **guard** that is an
@@ -857,7 +946,7 @@ anyway.
   enough to say the algorithms are the algorithms. It is not an audit, and this
   guide will not pretend it is one.
 
-## 15. What the framework will not do
+## 16. What the framework will not do
 
 * It will not talk to any database but SQLite, and only when you ask for it
   with a second import and `-lsqlite3`.
@@ -890,6 +979,7 @@ anyway.
 | `src/css.keal` | stylesheets, written in Keal |
 | `src/sql.keal` | SQLite: bound values, rows, transactions, migrations |
 | `runtime/kb_sql.h` | the C for that, and the only thing that needs a library |
+| `src/upload.keal` | `multipart/form-data`, parsed on the bytes |
 | `src/hash.keal` | SHA-256, HMAC, PBKDF2 — with the warning that goes with them |
 | `src/auth.keal` | passwords, sessions, guards, the CSRF token |
 | `src/app.keal` | the front door everything above is reachable from |

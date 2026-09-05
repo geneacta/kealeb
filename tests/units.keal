@@ -18,6 +18,7 @@ import "../src/text.keal"
 import "../src/live.keal"
 import "../src/theme.keal"
 import "../src/ui.keal"
+import "../src/upload.keal"
 import "../src/ws.keal"
 
 var checks = 0
@@ -251,9 +252,13 @@ proc testLive() {
 
     // A key says what a node *is*. Same shape, same position, different key:
     // the browser's node goes, and the caret, focus and scroll that came with
-    // it go too rather than being inherited by something else.
+    // it go with it rather than being inherited by something else. Two patches
+    // rather than one replacement, because a keyed list takes out everything
+    // that is leaving before it puts anything in — which is what lets the
+    // indices in both of them mean what they say.
     same(changes(column([el("input").keyed("a")]), column([el("input").keyed("b")])),
-         "[[\"r\",\"0\",\"<input>\"]]", "a different key is a different node")
+         "[[\"x\",\"\",\"0\"],[\"i\",\"\",\"0\",\"<input>\"]]",
+         "a different key is a different node")
     same(changes(column([el("input").keyed("a")]), column([el("input").keyed("a")])),
          "[]", "and the same key is the same node")
     same(changes(column([el("input").attr("value", "x")]), column([el("input").attr("value", "y")])),
@@ -338,6 +343,186 @@ proc testJson() {
     val emoji = parseJson("\"\\ud83d\\ude00\"")
     ok(emoji != null, "a surrogate pair reads")
     if (emoji != null) { sameInt(emoji.text().length, 1, "as one character") }
+}
+
+// ------------------------------------------------------------ the uploads
+
+val bound: String = "----kbBoundary9x"
+
+func posted(body: String): Request {
+    val r = parseHead("POST /upload HTTP/1.1\r\nHost: h\r\n" +
+                      "Content-Type: multipart/form-data; boundary=" + bound)
+    if (r == null) { panic("the test built a request that does not parse") }
+    r.body = bufOf(body)
+    return r
+}
+
+proc testUploads() {
+    same(boundaryOf("multipart/form-data; boundary=abc"), "abc", "the boundary, unquoted")
+    same(boundaryOf("multipart/form-data; boundary=\"a;b\""), "a;b",
+         "and quoted, with a semicolon inside it")
+    same(boundaryOf("text/plain"), "", "and none when there is none")
+
+    val params = headerParams("form-data; name=\"a\"; filename=\"x;y.txt\"")
+    same(params.get("name") ?: "", "a", "a parameter by name")
+    same(params.get("filename") ?: "", "x;y.txt",
+         "and one whose quoted value holds the separator")
+    same(headerParams("form-data; FileName=\"X\"").get("filename") ?: "", "X",
+         "parameter names fold case")
+
+    val body = "--" + bound + "\r\n" +
+        "Content-Disposition: form-data; name=\"title\"\r\n\r\n" +
+        "Le rapport\r\n" +
+        "--" + bound + "\r\n" +
+        "Content-Disposition: form-data; name=\"doc\"; filename=\"../../etc/pa;ssw\\\"d.txt\"\r\n" +
+        "Content-Type: text/plain; charset=utf-8\r\n\r\n" +
+        "hello\r\nworld\r\n" +
+        "--" + bound + "\r\n" +
+        "Content-Disposition: form-data; name=\"empty\"; filename=\"\"\r\n\r\n" +
+        "\r\n" +
+        "--" + bound + "--\r\n"
+
+    val req = posted(body)
+    ok(req.isMultipart(), "a multipart body says so")
+    sameInt(req.parts().size, 3, "three parts")
+
+    val title = req.part("title")
+    ok(title != null, "an ordinary field is a part")
+    if (title != null) {
+        same(title.text(), "Le rapport", "with its value")
+        ok(not title.isFile(), "and it is not a file")
+    }
+
+    val doc = req.file("doc")
+    ok(doc != null, "a file is a part")
+    if (doc != null) {
+        // The content has a CRLF in it, which is also what separates parts —
+        // so this is the check that the boundary scan is a boundary scan and
+        // not a line scan.
+        same(doc.text(), "hello\r\nworld", "whose content survives a CRLF inside it")
+        sameInt(doc.size(), 12, "counted in bytes")
+        same(doc.kind, "text/plain", "with the media type, and without its parameters")
+        // `name=` must not match inside `filename=`, and a `;` inside the
+        // quotes must not end the parameter. Both are here on purpose.
+        same(doc.filename, "../../etc/pa;ssw\"d.txt", "and the name exactly as it was sent")
+        same(doc.safeName(), "pa_ssw_d.txt",
+             "which is never a path once it has been through safeName")
+    }
+
+    ok(req.file("empty") == null, "a file input nobody chose a file for is not a file")
+    ok(req.part("empty") != null, "though it is still a part")
+    ok(req.part("nope") == null, "and a name nothing sent is null")
+
+    val plain = parseHead("POST /x HTTP/1.1\r\nHost: h\r\nContent-Type: application/x-www-form-urlencoded")
+    ok(plain != null, "an ordinary form parses")
+    if (plain != null) {
+        ok(not plain.isMultipart(), "and is not multipart")
+        ok(plain.parts().isEmpty(), "so it has no parts, rather than failing to have them")
+    }
+
+    // Half a body is something a handler can notice. A panic in the parser is
+    // something it cannot.
+    val truncated = posted("--" + bound + "\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nvalue")
+    ok(truncated.parts().isEmpty(), "a truncated body answers what it managed, and does not throw")
+
+    same(Part("f", "", "", bufOf("")).safeName(), "upload", "a part with no name gets the fallback")
+    same(Part("f", "..", "", bufOf("")).safeName(), "upload", "and so does one that is only dots")
+    same(Part("f", "C:\\Users\\ada\\photo.png", "", bufOf("")).safeName(), "photo.png",
+         "a Windows path keeps only its last segment")
+}
+
+// -------------------------------------------------------- the keyed lists
+
+func keyedList(keys: List<String>): Node {
+    val kids: List<Node> = []
+    for (k in keys) { kids.add(el("li").add(txt(k)).keyed(k)) }
+    return elt("ul", kids)
+}
+
+func moves(a: List<String>, b: List<String>): String {
+    return changes(keyedList(a), keyedList(b))
+}
+
+proc testKeyed() {
+    same(moves(["b", "c"], ["a", "b", "c"]),
+         "[[\"i\",\"\",\"0\",\"<li>a</li>\"]]",
+         "inserting at the front is one insert, not a rewrite of everything after it")
+    same(moves(["a", "c"], ["a", "b", "c"]),
+         "[[\"i\",\"\",\"1\",\"<li>b</li>\"]]", "and in the middle, one too")
+    same(moves(["a", "b", "c"], ["b", "c"]), "[[\"x\",\"\",\"0\"]]",
+         "removing from the front is one removal")
+    same(moves(["a", "b"], ["b", "a"]), "[[\"m\",\"\",\"1\",\"0\"]]",
+         "a swap is one move")
+    same(moves(["a", "b", "c"], ["c", "b", "a"]),
+         "[[\"m\",\"\",\"2\",\"0\"],[\"m\",\"\",\"2\",\"1\"]]",
+         "reversing three is two moves")
+    same(moves(["a", "b", "c", "d"], ["d", "a", "b", "c"]),
+         "[[\"m\",\"\",\"3\",\"0\"]]", "and pulling the last one to the front is one")
+    same(moves(["a", "b"], ["a", "b"]), "[]", "nothing changed, nothing sent")
+
+    // A move only ever pulls a node earlier, which is what makes the two
+    // indices in `m` need no rule about what happens after it.
+    for (patch in [moves(["a", "b", "c"], ["c", "b", "a"]), moves(["a", "b", "c"], ["b", "c", "a"])]) {
+        ok(not patch.contains("\"m\",\"\",\"0\""), "a move never pushes a node later")
+    }
+
+    // Content still diffs, at the position the node ended up in.
+    val before: List<Node> = [el("li").add(txt("one")).keyed("a"), el("li").add(txt("two")).keyed("b")]
+    val after: List<Node> = [el("li").add(txt("TWO")).keyed("b"), el("li").add(txt("one")).keyed("a")]
+    same(changes(elt("ul", before), elt("ul", after)),
+         "[[\"m\",\"\",\"1\",\"0\"],[\"t\",\"0.0\",\"TWO\"]]",
+         "a node that moved and changed is moved, then changed where it landed")
+
+    // Half a list with keys means something the framework cannot work out, and
+    // a repeated key names two different things. Both fall back to position,
+    // which is always correct and sometimes wasteful.
+    val dupA: List<Node> = [el("li").add(txt("x")).keyed("k"), el("li").add(txt("y")).keyed("k")]
+    val dupB: List<Node> = [el("li").add(txt("y")).keyed("k"), el("li").add(txt("x")).keyed("k")]
+    ok(not changes(elt("ul", dupA), elt("ul", dupB)).contains("\"m\""),
+       "a repeated key falls back to matching by position")
+    val halfA: List<Node> = [el("li").add(txt("x")).keyed("k"), el("li").add(txt("y"))]
+    val halfB: List<Node> = [el("li").add(txt("y")), el("li").add(txt("x")).keyed("k")]
+    ok(not changes(elt("ul", halfA), elt("ul", halfB)).contains("\"m\""),
+       "and so does a list only half of which is keyed")
+}
+
+// -------------------------------------------------------------- the filters
+
+proc testFilters() {
+    val site = app("filters")
+    site.log = false
+    val trail: List<String> = []
+
+    site.use({ req, next ->
+        trail.add("outer in")
+        val res = next.on(req)
+        trail.add("outer out")
+        res.with("x-outer", "1")
+    })
+    site.use({ req, next ->
+        trail.add("inner in")
+        val res = next.on(req)
+        trail.add("inner out")
+        res
+    })
+    site.use({ req, next ->
+        if (req.path.startsWith("/no")) { notFound("not for you").status(403) } else { next.on(req) }
+    })
+    site.get("/", { req -> trail.add("handler"); text("hi") })
+    site.get("/no/thing", { req -> trail.add("handler"); text("never") })
+
+    val s = site.serverOn(0)
+    val answered = s.handle(request("GET", "/"))
+    same(answered.text(), "hi", "the handler answers through the filters")
+    same(answered.headers.get("x-outer") ?: "", "1", "and a filter may change what comes back")
+    same(trail.join(" "), "outer in inner in handler inner out outer out",
+         "filters run outermost first, and unwind in the other direction")
+
+    trail.clear()
+    val refused = s.handle(request("GET", "/no/thing"))
+    sameInt(refused.code, 403, "a filter that does not call next has answered")
+    ok(not trail.contains("handler"), "and the handler never ran")
+    ok(trail.contains("outer out"), "while the filters outside it still unwound")
 }
 
 // --------------------------------------------------------------- the styles
@@ -437,6 +622,9 @@ testUi()
 testJson()
 testLive()
 testCss()
+testKeyed()
+testUploads()
+testFilters()
 testSchedule()
 testAssets()
 println("${checks} checks passed")

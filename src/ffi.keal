@@ -116,5 +116,8 @@ public extern func secureRandom(): Int = "kb_secure_random"
 /// A file's bytes, or 0. `readFile` answers text; a stylesheet, an image and
 /// a font are not text.
 public extern func fileRead(path: borrow String): Int = "kb_file_read"
+/// Write bytes to a file, replacing what was there. `writeFile` takes a
+/// String, and an upload is not text.
+public extern func fileWrite(path: borrow String, h: Int, off: Int, len: Int): Int = "kb_file_write"
 /// When a file last changed, in seconds since the epoch, or -1.
 public extern func fileMtime(path: borrow String): Int = "kb_file_mtime"

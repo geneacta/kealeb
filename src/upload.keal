@@ -1,0 +1,216 @@
+/// `multipart/form-data` — the encoding a form uses when it carries a file.
+///
+/// It is parsed over **bytes**, not text, and that is the whole reason it is
+/// its own file. Every other body kealeb reads is text: a query string, a
+/// form, some JSON. An upload is a PNG, and a PNG run through a UTF-8
+/// validator is a corrupted PNG. So the boundary scanning, the header split
+/// and the part bodies all work on a `Buf`, and only the headers — which the
+/// specification says are text — are ever turned into a `String`.
+///
+/// What this does not do, each refused rather than half-done: no
+/// `Content-Transfer-Encoding` other than the identity one browsers send, no
+/// `multipart/mixed` nesting, no streaming to disk (the whole body is in
+/// memory, bounded by the server's `maxBody`), and no RFC 5987 `filename*`.
+/// A browser posting a form sends none of those.
+
+import "./bytes.keal"
+import "./text.keal"
+import "./ffi.keal"
+
+/// One field of a posted form.
+public class Part(
+    /// The field's name — the `name` attribute of the input.
+    public val name: String,
+    /// The name the browser gave the file, or `""` when the field is not a
+    /// file. **Never use this as a path**; see `safeName`.
+    public val filename: String,
+    /// The media type the browser claimed, or `""`. It is a claim: a client
+    /// says what it likes, and a server that trusts it is a server that
+    /// serves a script as an image.
+    public val kind: String,
+    package val body: Buf
+) {
+    /// Is this a file rather than an ordinary field? A browser sends a
+    /// `filename` for a file input even when nothing was chosen, in which case
+    /// the name is empty and so is the content.
+    public func isFile(): Bool { return not this.filename.isEmpty() }
+
+    /// How many bytes.
+    public func size(): Int { return this.body.len }
+
+    /// The content as text — for an ordinary field. Bytes that are not UTF-8
+    /// arrive as U+FFFD, the same as everywhere else.
+    public func text(): String { return this.body.all() }
+
+    /// The content as bytes.
+    public func bytes(): Buf { return this.body }
+
+    /// Write it to a path **you** chose. Answers whether it worked.
+    ///
+    /// The path is yours on purpose. There is no `save(intoDirectory)` here,
+    /// because that function would have to decide what to do with the name the
+    /// client sent, and every wrong answer to that question is a directory
+    /// somebody escaped.
+    public func saveTo(path: String): Bool {
+        return fileWrite(path, this.body.handle(), 0, this.body.len) == 1
+    }
+
+    /// The client's filename with everything dangerous taken out: no
+    /// directories, no leading dot, nothing but letters, digits and
+    /// `. - _`, and never empty.
+    ///
+    /// It is still a name a stranger chose. Use it for showing somebody what
+    /// they uploaded; for storing it, a name you generated is safer, and this
+    /// is at most the extension you keep from theirs.
+    public func safeName(fallback: String = "upload"): String {
+        val tail = lastSegment(this.filename)
+        val out = buf(tail.length + 8)
+        for (c in tail) {
+            val v = c.code()
+            val letter = ((v >= 65) and (v <= 90)) or ((v >= 97) and (v <= 122))
+            val digit = (v >= 48) and (v <= 57)
+            val plain = ((c == ".") or (c == "-")) or (c == "_")
+            if ((letter or digit) or plain) { out.text(c) } else { out.text("_") }
+        }
+        var name = out.all()
+        while (name.startsWith(".")) { name = name.substring(1, name.length) }
+        if (name.isEmpty()) { return fallback }
+        if (name.length > 100) { name = name.substring(0, 100) }
+        return name
+    }
+}
+
+func lastSegment(path: String): String {
+    var out = path
+    for (sep in ["/", "\\"]) {
+        val parts = out.split(sep)
+        out = parts[parts.size - 1]
+    }
+    return out
+}
+
+/// The boundary out of a `Content-Type`, or `""` when there is none.
+///
+/// `multipart/form-data; boundary=----WebKitFormBoundaryAbc123`, and the
+/// value may be quoted.
+public func boundaryOf(contentType: String): String {
+    return headerParams(contentType).get("boundary") ?: ""
+}
+
+/// Read a multipart body.
+///
+/// Answers the parts in the order they arrived, or an empty list when the body
+/// is not a multipart body of this boundary. A malformed body answers what it
+/// managed to read rather than throwing: half a form is a thing a handler can
+/// notice and refuse, and a panic in the parser is a thing it cannot.
+public func parseMultipart(body: Buf, contentType: String): List<Part> {
+    val parts: List<Part> = []
+    val boundary = boundaryOf(contentType)
+    if (boundary.isEmpty()) { return parts }
+
+    val opening = "--" + boundary
+    val between = "\r\n--" + boundary
+
+    // The body opens with the boundary, and anything before it is preamble the
+    // specification allows and browsers do not send.
+    var at = body.find(opening, 0)
+    if (at < 0) { return parts }
+    at = at + textBytes(opening)
+
+    while (true) {
+        // `--` right after a boundary is the end of the whole thing.
+        if ((body.at(at) == 45) and (body.at(at + 1) == 45)) { return parts }
+        // Otherwise a CRLF, then the part's headers.
+        if (not ((body.at(at) == 13) and (body.at(at + 1) == 10))) { return parts }
+        at = at + 2
+
+        val headEnd = body.find("\r\n\r\n", at)
+        if (headEnd < 0) { return parts }
+        val head = body.textAt(at, headEnd - at)
+        val from = headEnd + 4
+
+        val to = body.find(between, from)
+        if (to < 0) { return parts }
+
+        val content = buf((to - from) + 1)
+        content.raw(body.handle(), from, to - from)
+        parts.add(partOf(head, content))
+
+        at = to + textBytes(between)
+    }
+    return parts
+}
+
+func partOf(head: String, content: Buf): Part {
+    var name = ""
+    var filename = ""
+    var kind = ""
+    for (line in head.split("\r\n")) {
+        val cut = cutOn(line, ":")
+        if (cut == null) { continue }
+        val field = headerKey(cut.first)
+        val value = cut.second.trim()
+        if (field == "content-type") {
+            kind = before(value, ";").trim()
+        } else if (field == "content-disposition") {
+            val params = headerParams(value)
+            name = params.get("name") ?: ""
+            filename = params.get("filename") ?: ""
+        }
+    }
+    return Part(name, filename, kind, content)
+}
+
+/// The parameters of a header value, as a map.
+///
+/// A scanner rather than `split(";")` and `indexOf("name=")`, and both halves
+/// of that matter. Splitting on `;` cuts a quoted filename that contains one —
+/// which a stranger chooses, so it is not a rare case, it is an attack. And
+/// looking for `name="` finds it inside `filename="`, which is the same bug
+/// with a friendlier face: it silently answers the wrong parameter.
+///
+/// Keys fold to lower case; values are unquoted, with a backslash escape
+/// honoured inside the quotes.
+public func headerParams(value: String): Map<String, String> {
+    val out: Map<String, String> = {}
+    var i = 0
+    val n = value.length
+    while (i < n) {
+        // Anything up to the first `;` is the value the parameters hang off.
+        while ((i < n) and ((value[i] == ";") or (value[i] == " "))) { i = i + 1 }
+        val key = buf(16)
+        while ((i < n) and (((value[i] != "=") and (value[i] != ";")) and (value[i] != " "))) {
+            key.text(value[i])
+            i = i + 1
+        }
+        while ((i < n) and (value[i] == " ")) { i = i + 1 }
+        if ((i >= n) or (value[i] != "=")) {
+            if (i < n) { i = i + 1 }
+            continue
+        }
+        i = i + 1
+        val got = buf(32)
+        if ((i < n) and (value[i] == "\"")) {
+            i = i + 1
+            while (i < n) {
+                val c = value[i]
+                if (c == "\\") {
+                    if (i + 1 < n) { got.text(value[i + 1]) }
+                    i = i + 2
+                    continue
+                }
+                if (c == "\"") { i = i + 1; break }
+                got.text(c)
+                i = i + 1
+            }
+        } else {
+            while ((i < n) and (value[i] != ";")) {
+                got.text(value[i])
+                i = i + 1
+            }
+        }
+        val name = key.all().trim().toLower()
+        if (not name.isEmpty()) { out.set(name, got.all().trim()) }
+    }
+    return out
+}

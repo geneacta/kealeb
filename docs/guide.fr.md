@@ -301,6 +301,57 @@ site.post("/saluer", { req ->
 Rien ici n'a besoin de socket, de session ni de script. C'est toute la
 troisième route de [`examples/hello.keal`](../examples/hello.keal).
 
+### Les fichiers
+
+Un formulaire qui porte un fichier poste du `multipart/form-data`, ce sont des
+octets et non du texte — un PNG passé dans un validateur UTF-8 est un PNG
+corrompu. C'est donc analysé sur les octets, et une `Part` vous rend l'un ou
+l'autre.
+
+```keal
+site.post("/upload", { req ->
+    val doc = req.file("doc")
+    if (doc == null) {
+        badRequest("choisissez un fichier")
+    } else {
+        doc.saveTo("uploads/${epochS()}-${doc.safeName()}")
+        redirect("/", 303)
+    }
+})
+```
+
+| | |
+|---|---|
+| `req.isMultipart()` | est-ce ce genre de corps ? |
+| `req.parts()` | toutes les parties, dans l'ordre |
+| `req.part(nom)` | une partie, ou null |
+| `req.file(nom)` | une partie, mais **seulement** si un fichier a vraiment été choisi |
+| `p.name` `p.filename` `p.kind` | le nom du champ, le nom du fichier côté client, le type prétendu |
+| `p.text()` `p.bytes()` `p.size()` `p.isFile()` | |
+| `p.saveTo(chemin)` · `p.safeName(défaut)` | |
+
+Trois choses à savoir avant d'écrire le gestionnaire :
+
+* **`file` et `part` ne posent pas la même question.** Un navigateur envoie une
+  partie pour un champ fichier même quand personne n'a choisi de fichier — nom
+  vide, contenu vide. `part` vous la donne ; `file` répond `null`, ce qui est
+  la vérification que tout gestionnaire d'envoi oublierait sinon.
+* **`kind` est une affirmation.** Le client dit ce qu'il veut. Un serveur qui
+  le croit est un serveur qui sert un script comme une image.
+* **`filename` n'est jamais un chemin.** C'est ce qu'un inconnu a tapé,
+  `../../etc/` compris. `saveTo` prend un chemin que *vous* avez choisi, et il
+  n'y a délibérément pas de `save(dansCeRépertoire)` : cette fonction devrait
+  décider quoi faire du nom du client, et chaque mauvaise réponse est un
+  répertoire dont quelqu'un est sorti. `safeName()` le réduit aux lettres,
+  chiffres et `. - _`, et cela reste un nom choisi par un inconnu : servez-vous
+  en pour montrer à quelqu'un ce qu'il a envoyé, et générez le nom que vous
+  rangez.
+
+Tout le corps est en mémoire, borné par le `maxBody` du serveur (8 Mo par
+défaut). Pas d'écriture au fil de l'eau, pas de `multipart/mixed`, et pas de
+`Content-Transfer-Encoding` autre que l'identité — un navigateur qui poste un
+formulaire n'envoie rien de tout cela.
+
 ## 7. Les pages vivantes
 
 ```keal
@@ -532,7 +583,48 @@ gestionnaires ne mentionnent jamais `site`.
 `weak` n'est pas la réponse ici : ce serait dire que l'application n'est que
 faiblement tenue par ses propres routes, ce que le programme ne veut pas dire.
 
-## 11. La mise en service
+## 11. Les filtres
+
+Un filtre enveloppe chaque requête. C'est une fonction ordinaire : pas de
+registre, pas d'annotation d'ordre, pas de configuration de chaîne — l'ordre
+est celui dans lequel vous les avez écrits.
+
+```keal
+site.use({ req, next ->
+    val debut = monoMs()
+    val res = next.on(req)
+    println("${req.method} ${req.path} ${res.code} ${monoMs() - debut}ms")
+    res
+})
+```
+
+Ils s'exécutent **du plus extérieur au plus intérieur** et se déroulent dans
+l'autre sens, donc le premier ajouté est le dernier à voir la réponse. Un
+filtre qui n'appelle jamais `next.on(req)` a répondu lui-même, et c'est à quoi
+ressemble un refus :
+
+```keal
+site.use({ req, next ->
+    if (req.path.startsWith("/admin") and (not a.signedIn(req))) {
+        redirect("/sign-in", 303)
+    } else {
+        next.on(req)
+    }
+})
+```
+
+Les filtres sont **à l'intérieur** de ce qu'installe `secure` et **à
+l'extérieur** du routeur : un filtre ne voit jamais une requête qui a raté son
+contrôle CSRF, et tout ce qu'un filtre répond reçoit quand même les en-têtes.
+
+Un filtre est tenu par l'application, donc la règle qui vaut partout ailleurs
+vaut ici : un filtre ne doit pas capturer l'application. Lisez ce dont il a
+besoin dans un local d'abord.
+
+Quand une seule fonction suffit, `Server.handle` est toujours là, et le
+remplacer remplace tout, routage compris.
+
+## 12. La mise en service
 
 ```keal
 site.run(8080)                        // 127.0.0.1 — ne peut surprendre personne
@@ -560,7 +652,7 @@ La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc
 un journal redirigé vers un fichier ou un superviseur arrive au fil de
 l'écriture.
 
-## 12. Le travail programmé
+## 13. Le travail programmé
 
 ```keal
 site.every(60000, { -> viderLesPaniersExpires() })   // chaque minute
@@ -607,7 +699,7 @@ Une tâche qui doit tourner à 03:00 doit regarder l'horloge elle-même —
 fuseaux et l'heure d'été est un autre programme que celui-ci, et prétendre le
 contraire est la façon dont un traitement tourne deux fois en octobre.
 
-## 13. Une base de données
+## 14. Une base de données
 
 SQLite, et c'est un **second import et un second drapeau de liaison** — un
 programme qui n'ouvre jamais de base ne doit pas se lier à une :
@@ -733,7 +825,7 @@ aussi la seule chose qu'une page vivante ne peut pas deviner —
 `site.live.refreshAll()` dans un minuteur, pour qu'une page apprenne un
 changement qu'elle n'a pas causé.
 
-## 14. La sécurité
+## 15. La sécurité
 
 Quatre idées, et il n'y en a pas de cinquième. Un **mot de passe** stockable,
 une **session** qui est un cookie signé et rien sur le serveur, une **garde**
@@ -883,7 +975,7 @@ POST-puis-redirection, que vous voulez de toute façon.
   sont les algorithmes. Ce n'est pas un audit, et ce guide ne prétendra pas que
   c'en est un.
 
-## 15. Ce que le cadriciel ne fera pas
+## 16. Ce que le cadriciel ne fera pas
 
 * Il ne parlera à aucune base de données autre que SQLite, et seulement si vous
   la demandez par un second import et `-lsqlite3`.
@@ -918,6 +1010,7 @@ POST-puis-redirection, que vous voulez de toute façon.
 | `src/css.keal` | les feuilles de style, écrites en Keal |
 | `src/sql.keal` | SQLite : valeurs liées, lignes, transactions, migrations |
 | `runtime/kb_sql.h` | le C correspondant, seul à réclamer une bibliothèque |
+| `src/upload.keal` | `multipart/form-data`, analysé sur les octets |
 | `src/hash.keal` | SHA-256, HMAC, PBKDF2 — avec l'avertissement qui va avec |
 | `src/auth.keal` | mots de passe, sessions, gardes, jeton CSRF |
 | `src/app.keal` | la porte d'entrée depuis laquelle tout ce qui précède est joignable |

@@ -227,10 +227,11 @@ func patch4(op: String, path: String, a: String, b: String): Json {
 
 /// Compare two trees and write what changed into `out`.
 ///
-/// Six operations, and no seventh: set a text node's text, set an attribute,
-/// remove an attribute, replace a node, insert a child, remove a child. A
-/// browser can do each of them in one call, which is why the list is this one
-/// and not a shorter one that needs interpretation at the other end.
+/// Seven operations, and no eighth: set a text node's text, set an attribute,
+/// remove an attribute, replace a node, insert a child, remove a child, and
+/// move a child earlier. A browser can do each of them in one call, which is
+/// why the list is this one and not a shorter one that needs interpretation at
+/// the other end.
 ///
 /// **A different tag or a different key is a replacement, not a patch**, and
 /// the key half is the one worth explaining. A node's identity here is its
@@ -274,6 +275,11 @@ public proc diffNode(old: Node, now: Node, path: String, var out: List<Json>) {
         if (not now.attrs.containsKey(name)) { out.add(patch3("d", path, name)) }
     }
 
+    if (keyedPair(old.kids, now.kids)) {
+        diffKeyed(old, now, path, out)
+        return
+    }
+
     val shared = old.kids.size.min(now.kids.size)
     var i = 0
     while (i < shared) {
@@ -294,6 +300,100 @@ public proc diffNode(old: Node, now: Node, path: String, var out: List<Json>) {
             out.add(patch3("x", path, "${k}"))
             k = k - 1
         }
+    }
+}
+
+/// May these two lists of children be matched by key rather than by position?
+///
+/// Only when **every** child on both sides has one and no key repeats. Half a
+/// list with keys is a list whose author meant something the framework cannot
+/// work out, and a repeated key is one that names two different things — both
+/// are answered by falling back to matching by position, which is always
+/// correct and sometimes wasteful, rather than by guessing.
+func keyedPair(old: List<Node>, now: List<Node>): Bool {
+    if (old.isEmpty() or now.isEmpty()) { return false }
+    return distinctlyKeyed(old) and distinctlyKeyed(now)
+}
+
+func distinctlyKeyed(kids: List<Node>): Bool {
+    val seen: Set<String> = setOf([])
+    for (k in kids) {
+        if (k.key.isEmpty()) { return false }
+        if (seen[k.key]) { return false }
+        seen.add(k.key)
+    }
+    return true
+}
+
+func indexFrom(keys: List<String>, want: String, at: Int): Int {
+    var i = at
+    while (i < keys.size) {
+        if (keys[i] == want) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+/// Match children by key, so that a row which moved is moved rather than
+/// rewritten.
+///
+/// Three passes, and the order between them is what makes the indices in the
+/// patches mean anything: everything that is leaving goes first, backwards, so
+/// each index still names the child it named when the list was made; then the
+/// list is walked once, pulling each wanted key into place or inserting it;
+/// then the children that survived are compared with their new selves, at the
+/// positions they now hold. Every structural patch is emitted before every
+/// content patch, so by the time a content patch names a path, that path is
+/// where the node is.
+///
+/// A move only ever pulls a node **earlier**, which is what walking the new
+/// list front to back produces, and is why `m` needs no rule about what
+/// happens to the indices after it.
+proc diffKeyed(old: Node, now: Node, path: String, var out: List<Json>) {
+    val current: List<String> = []
+    val byKey: Map<String, Node> = {}
+    for (k in old.kids) {
+        current.add(k.key)
+        byKey.set(k.key, k)
+    }
+
+    val wanted: Set<String> = setOf([])
+    for (k in now.kids) { wanted.add(k.key) }
+
+    var i = current.size - 1
+    while (i >= 0) {
+        if (not wanted[current[i]]) {
+            out.add(patch3("x", path, "${i}"))
+            current.removeAt(i)
+        }
+        i = i - 1
+    }
+
+    var at = 0
+    while (at < now.kids.size) {
+        val want = now.kids[at].key
+        if ((at < current.size) and (current[at] == want)) {
+            at = at + 1
+            continue
+        }
+        val from = indexFrom(current, want, at)
+        if (from > at) {
+            out.add(patch4("m", path, "${from}", "${at}"))
+            current.removeAt(from)
+            current.insert(at, want)
+        } else {
+            out.add(patch4("i", path, "${at}", render(now.kids[at])))
+            current.insert(at, want)
+        }
+        at = at + 1
+    }
+
+    var j = 0
+    while (j < now.kids.size) {
+        val kid = now.kids[j]
+        val was = byKey.get(kid.key)
+        if (was != null) { diffNode(was, kid, childPath(path, j), out) }
+        j = j + 1
     }
 }
 
@@ -402,6 +502,16 @@ public val clientScript: String = """
     if (op === 'x') {
       var gone = node.childNodes[parseInt(p[2], 10)];
       if (gone) node.removeChild(gone);
+      return;
+    }
+    if (op === 'm') {
+      // Only ever earlier, which is what the server emits — so the node the
+      // destination index names is read before anything moves, and putting
+      // the moved node in front of it lands it exactly there.
+      var kids = node.childNodes;
+      var moving = kids[parseInt(p[2], 10)];
+      var before = kids[parseInt(p[3], 10)];
+      if (moving && before) node.insertBefore(moving, before);
       return;
     }
   }
