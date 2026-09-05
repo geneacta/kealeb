@@ -6,7 +6,7 @@ versions longues sont dans [`examples/`](../examples).
 
 *The same walkthrough in English: [`guide.md`](guide.md).*
 
-*Également en ligne, mis en page : [geneacta.github.io/kealeb](https://geneacta.github.io/kealeb/) — et le langage dans lequel tout ceci est écrit, [Keal](https://geneacta.github.io/keal/).*
+*Également en ligne, mis en page : [geneacta.github.io/kealeb](https://geneacta.github.io/kealeb/fr/) — et le langage dans lequel tout ceci est écrit, [Keal](https://geneacta.github.io/keal/fr/).*
 
 ---
 

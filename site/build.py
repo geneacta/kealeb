@@ -29,7 +29,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE = os.path.join(ROOT, "site")
 GITHUB = "https://github.com/geneacta/kealeb/blob/main/"
 BASE_URL = "https://geneacta.github.io/kealeb/"
-KEAL_SITE = "https://geneacta.github.io/keal/"
+# Keal's site, per language. A French reader sent to an English page is a seam
+# nobody sees while writing it and everybody feels while reading — Keal found
+# it on its side first, pointing both of its cards at our English half, and
+# this was the same mistake facing the other way.
+KEAL_SITE = {"en": "https://geneacta.github.io/keal/",
+             "fr": "https://geneacta.github.io/keal/fr/"}
 
 
 INLINE_CODE = re.compile(r"`([^`]+)`")
@@ -282,7 +287,7 @@ def page(lang, filename, title, description, body, active=None, toc=None):
         "lang": lang, "title": html.escape(title), "desc": html.escape(description),
         "canonical": canonical, "alt_en": alt_en, "alt_fr": alt_fr, "locale": locale,
         "prefix": prefix, "home": "index.html", "links": links,
-        "other": other, "other_label": other_label, "keal": KEAL_SITE,
+        "other": other, "other_label": other_label, "keal": KEAL_SITE[lang],
         "version": version(),
         "body": layout,
         "foot0": foot[0], "foot1": foot[1], "foot2": foot[2], "foot3": foot[3],
@@ -653,7 +658,42 @@ def check_links(written):
             # checker that only looks at filenames cannot see.
             if anchor and where in ids and anchor not in ids[where]:
                 broken.append((os.path.relpath(path, ROOT), href, "no such anchor on that page"))
+    broken += check_language(written)
     return broken
+
+
+# The sites that have a French half. A link from a French page to one of these
+# should land in it.
+BILINGUAL = ("https://geneacta.github.io/keal/", "https://geneacta.github.io/kealeb/")
+
+
+def check_language(written):
+    """A French page must not send a French reader to an English one.
+
+    This is a seam nobody sees while writing it and everybody feels while
+    reading: the nav link, the footer link and the sentence in the guide were
+    all pointing at English homes from the French pages. Keal had the same
+    thing facing the other way — both of its cards sent our French readers to
+    our English half — and neither of us noticed until one of us looked.
+
+    Only reader-facing links count. `rel="alternate"` and `rel="canonical"`
+    name the other language on purpose, and flagging them would be flagging the
+    thing that makes the site bilingual.
+    """
+    wrong = []
+    for path in written:
+        if not path.endswith(".html") or os.sep + "fr" + os.sep not in path:
+            continue
+        for tag in re.findall(r"<[^>]+>", open(path, encoding="utf-8").read()):
+            if 'rel="alternate"' in tag or 'rel="canonical"' in tag or "og:url" in tag:
+                continue
+            for href in re.findall(r'href="(https://[^"]+)"', tag):
+                for site in BILINGUAL:
+                    if href.startswith(site) and not href.startswith(site + "fr/"):
+                        wrong.append((os.path.relpath(path, ROOT), href,
+                                      "a French page linking to an English one; "
+                                      "that site has %sfr/" % site))
+    return wrong
 
 
 if __name__ == "__main__":
