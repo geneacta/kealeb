@@ -765,12 +765,18 @@ is never touched, because its media type is not on the short list of things
 worth compressing and DEFLATE would spend those milliseconds making it very
 slightly bigger.
 
-The compressor is `src/gzip.keal`, written in Keal, and it emits **fixed
-Huffman codes only**. RFC 1951's dynamic blocks would win another ten to
-fifteen per cent on text and are more code than everything else in that file
-put together; on HTML the fixed table already does most of the work, because
-most of the work is the repetition and not the alphabet. When the ratio matters
-more than the size of that file, dynamic is what to add.
+The compressor is `src/gzip.keal`, written in Keal. Each block goes out with
+whichever code table is smaller — the fixed one the specification writes down,
+or one built from what that block actually contains and written into the output
+ahead of it. Choosing costs one loop over the frequencies and is worth about a
+fifth on HTML; a block whose alphabet is nearly uniform, a fragment of an image
+or a base64 blob, comes out smaller with the fixed table, which is why it is
+asked rather than assumed.
+
+Measured against the reference implementation on the eight files the suite
+compresses, `gzip -6` and this one produce **the same size on six of them,
+one byte less on two, and eight bytes more on one** — a 13 KB file, which is
+three parts in a thousand. There is no reason to reach for anything else.
 
 There is no decompressor. kealeb compresses and never inflates, which is also
 why nothing in Keal can check the output: `tools/test.sh` hands every file it

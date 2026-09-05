@@ -790,13 +790,19 @@ un PNG, une police — n'est jamais touché : son type n'est pas dans la courte
 liste de ce qui vaut la peine, et DEFLATE dépenserait ces millisecondes à le
 grossir très légèrement.
 
-Le compresseur est `src/gzip.keal`, écrit en Keal, et il n'émet que des
-**codes de Huffman fixes**. Les blocs dynamiques de la RFC 1951 gagneraient dix
-à quinze pour cent de plus sur du texte et représentent plus de code que tout
-le reste de ce fichier réuni ; sur du HTML, la table fixe fait déjà l'essentiel,
-parce que l'essentiel est la répétition et non l'alphabet. Le jour où le taux
-comptera plus que la taille de ce fichier, c'est le dynamique qu'il faudra
-ajouter.
+Le compresseur est `src/gzip.keal`, écrit en Keal. Chaque bloc part avec celle
+des deux tables qui est la plus petite — celle que la spécification écrit en
+dur, ou une construite à partir de ce que ce bloc contient vraiment et écrite
+dans la sortie devant lui. Choisir coûte une boucle sur les fréquences et vaut
+environ un cinquième sur du HTML ; un bloc dont l'alphabet est presque uniforme
+— un fragment d'image, un blob base64 — sort plus petit avec la table fixe, et
+c'est pour ça qu'on demande au lieu de supposer.
+
+Mesuré contre l'implémentation de référence sur les huit fichiers que la suite
+compresse, `gzip -6` et celui-ci donnent **la même taille sur six d'entre eux,
+un octet de moins sur deux, et huit octets de plus sur un** — un fichier de
+13 Ko, soit trois pour mille. Il n'y a pas de raison d'aller chercher autre
+chose.
 
 Il n'y a pas de décompresseur. kealeb compresse et ne décompresse jamais, et
 c'est aussi pourquoi rien en Keal ne peut vérifier la sortie : `tools/test.sh`

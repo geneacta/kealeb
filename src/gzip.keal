@@ -92,18 +92,25 @@ func bits(out: Buf): Bits { return Bits(out, 0, 0) }
 
 // ------------------------------------------------- the fixed Huffman codes
 
-/// The literal/length code for a symbol, and how many bits it takes.
-/// RFC 1951 §3.2.6, which writes them as four ranges rather than a table.
-proc putLiteral(var w: Bits, symbol: Int) {
-    if (symbol < 144) {
-        w.putCode(0x30 + symbol, 8)
-    } else if (symbol < 256) {
-        w.putCode(0x190 + (symbol - 144), 9)
-    } else if (symbol < 280) {
-        w.putCode(symbol - 256, 7)
-    } else {
-        w.putCode(0xC0 + (symbol - 280), 8)
+/// The fixed literal/length code for a symbol, and its width. RFC 1951 §3.2.6,
+/// which writes them as four ranges rather than a table — so this builds the
+/// table once and everything after it is table-driven, dynamic and fixed
+/// alike.
+func fixedLitLengths(): List<Int> {
+    val out: List<Int> = []
+    for (i in 0..288) {
+        if (i < 144) { out.add(8) }
+        else if (i < 256) { out.add(9) }
+        else if (i < 280) { out.add(7) }
+        else { out.add(8) }
     }
+    return out
+}
+
+func fixedDistLengths(): List<Int> {
+    val out: List<Int> = []
+    for (i in 0..30) { out.add(5) }
+    return out
 }
 
 val lengthBase: List<Int> = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
@@ -116,20 +123,162 @@ val distBase: List<Int> = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129,
 val distExtra: List<Int> = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
                             7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
 
-proc putMatch(var w: Bits, length: Int, distance: Int) {
+func lengthCodeOf(length: Int): Int {
     var lc = 28
     while ((lc > 0) and (lengthBase[lc] > length)) { lc = lc - 1 }
-    putLiteral(w, 257 + lc)
-    if (lengthExtra[lc] > 0) { w.put(length - lengthBase[lc], lengthExtra[lc]) }
-
-    var dc = 29
-    while ((dc > 0) and (distBase[dc] > distance)) { dc = dc - 1 }
-    // A distance code is five bits, fixed, most-significant first.
-    w.putCode(dc, 5)
-    if (distExtra[dc] > 0) { w.put(distance - distBase[dc], distExtra[dc]) }
+    return lc
 }
 
-// ---------------------------------------------------------------- matching
+func distCodeOf(distance: Int): Int {
+    var dc = 29
+    while ((dc > 0) and (distBase[dc] > distance)) { dc = dc - 1 }
+    return dc
+}
+
+// ------------------------------------------------- codes built for the block
+//
+// A dynamic block carries its own code table: the compressor counts what the
+// block actually contains, builds a Huffman code for it, writes that code down
+// in the output, and then uses it. It costs the table — a hundred bytes or so
+// — and it wins whatever the block's own distribution is worth, which on
+// English text and HTML is another ten to fifteen per cent over the fixed
+// table the specification hard-codes.
+//
+// Both are here, and each block goes out as whichever is smaller, counted in
+// bits before anything is written. A block whose alphabet is nearly uniform —
+// a fragment of an image, a base64 blob — is smaller with the fixed table, and
+// asking rather than assuming costs one loop over the frequencies.
+
+val maxBits: Int = 15
+
+/// The lengths of a Huffman code over these frequencies, none longer than
+/// `limit` bits, and zero for a symbol that does not occur.
+///
+/// The tree is built by taking the two rarest nodes over and over, which is
+/// Huffman's own algorithm and is O(n²) here — with at most 288 symbols that
+/// is eighty thousand comparisons per block, which is nothing next to the
+/// matching that produced the block.
+///
+/// A code longer than `limit` cannot be written down in DEFLATE's format, and
+/// it happens when one symbol is very much rarer than another. The fix is the
+/// standard one: halve every frequency, rounding up so nothing that occurred
+/// becomes something that did not, and build again. Flattening the
+/// distribution shortens the longest code, and rounding up guarantees it
+/// terminates.
+func codeLengths(freq: List<Int>, limit: Int): List<Int> {
+    val n = freq.size
+    val counts: List<Int> = []
+    for (i in 0..n) { counts.add(freq[i]) }
+
+    while (true) {
+        val lengths = huffmanLengths(counts)
+        var longest = 0
+        for (i in 0..n) {
+            if (lengths[i] > longest) { longest = lengths[i] }
+        }
+        if (longest <= limit) { return lengths }
+        for (i in 0..n) {
+            if (counts[i] > 0) { counts.set(i, (counts[i] + 1) / 2) }
+        }
+    }
+    return []
+}
+
+func huffmanLengths(freq: List<Int>): List<Int> {
+    val n = freq.size
+    val lengths: List<Int> = []
+    for (i in 0..n) { lengths.add(0) }
+
+    // Nodes: the leaves first, then the internal ones as they are made. A
+    // node's weight, and its two children.
+    val weight: List<Int> = []
+    val left: List<Int> = []
+    val right: List<Int> = []
+    val alive: List<Int> = []
+    for (i in 0..n) {
+        weight.add(freq[i])
+        left.add(-1)
+        right.add(-1)
+        alive.add(freq[i] > 0 ? 1 : 0)
+    }
+
+    var living = 0
+    for (i in 0..n) { living = living + alive[i] }
+
+    // One symbol, or none: a code still has to be at least one bit, because a
+    // zero-bit code cannot be written or read.
+    if (living == 0) { return lengths }
+    if (living == 1) {
+        for (i in 0..n) {
+            if (alive[i] == 1) { lengths.set(i, 1) }
+        }
+        return lengths
+    }
+
+    while (living > 1) {
+        var a = -1
+        var b = -1
+        for (i in 0..weight.size) {
+            if (alive[i] == 0) { continue }
+            if ((a < 0) or (weight[i] < weight[a])) { b = a; a = i }
+            else if ((b < 0) or (weight[i] < weight[b])) { b = i }
+        }
+        alive.set(a, 0)
+        alive.set(b, 0)
+        weight.add(weight[a] + weight[b])
+        left.add(a)
+        right.add(b)
+        alive.add(1)
+        living = living - 1
+    }
+
+    var root = -1
+    for (i in 0..alive.size) {
+        if (alive[i] == 1) { root = i }
+    }
+    depths(root, 0, left, right, n, lengths)
+    return lengths
+}
+
+proc depths(node: Int, depth: Int, left: List<Int>, right: List<Int>,
+            leaves: Int, var lengths: List<Int>) {
+    if (node < leaves) {
+        lengths.set(node, depth < 1 ? 1 : depth)
+        return
+    }
+    depths(left[node], depth + 1, left, right, leaves, lengths)
+    depths(right[node], depth + 1, left, right, leaves, lengths)
+}
+
+/// The canonical code for each symbol, from its length. RFC 1951 §3.2.2,
+/// which is three loops and no choices.
+func canonical(lengths: List<Int>): List<Int> {
+    val n = lengths.size
+    val countOf: List<Int> = []
+    for (i in 0..(maxBits + 1)) { countOf.add(0) }
+    for (i in 0..n) {
+        if (lengths[i] > 0) { countOf.set(lengths[i], countOf[lengths[i]] + 1) }
+    }
+    val next: List<Int> = []
+    for (i in 0..(maxBits + 1)) { next.add(0) }
+    var code = 0
+    for (bits in 1..(maxBits + 1)) {
+        code = (code + countOf[bits - 1]) * 2
+        next.set(bits, code)
+    }
+    val codes: List<Int> = []
+    for (i in 0..n) { codes.add(0) }
+    for (i in 0..n) {
+        val len = lengths[i]
+        if (len > 0) {
+            codes.set(i, next[len])
+            next.set(len, next[len] + 1)
+        }
+    }
+    return codes
+}
+
+// ---------------------------------------------------------------- matching// ---------------------------------------------------------------- matching
 
 val windowSize: Int = 32768
 val minMatch: Int = 3
@@ -149,16 +298,31 @@ func hashAt(b: Buf, i: Int): Int {
     return (((b.at(i) shl 10) bxor (b.at(i + 1) shl 5)) bxor b.at(i + 2)) band (hashSize - 1)
 }
 
-/// DEFLATE the bytes into one fixed-Huffman block.
+/// What one block holds: for each token, either a literal byte or a match.
+///
+/// A dynamic block has to be counted before it can be written, so the tokens
+/// are kept rather than emitted as they are found. Sixteen thousand of them is
+/// a block: long enough that the table it carries is paid for many times over,
+/// short enough that a page of HTML and a paragraph of English do not have to
+/// share one code.
+class Tokens(package var length: List<Int>, package var distance: List<Int>)
+
+val tokensPerBlock: Int = 16384
+
+func noTokens(): Tokens {
+    val a: List<Int> = []
+    val b: List<Int> = []
+    return Tokens(a, b)
+}
+
+/// Find the matches, in blocks, and write each one.
 proc deflateInto(b: Buf, var w: Bits) {
-    // `head` is the most recent position with each hash; `prev` chains back
-    // through the earlier ones. Both are plain lists of positions, which is
-    // the whole of the match finder.
     val head: List<Int> = []
     for (i in 0..hashSize) { head.add(-1) }
     val prev: List<Int> = []
     for (i in 0..b.len) { prev.add(-1) }
 
+    var tokens = noTokens()
     var at = 0
     while (at < b.len) {
         var bestLength = 0
@@ -171,9 +335,6 @@ proc deflateInto(b: Buf, var w: Bits) {
             val floor = at - windowSize
             while (((candidate >= 0) and (candidate > floor)) and (tries < chainLimit)) {
                 tries = tries + 1
-                // The byte after the best match so far: if it does not agree,
-                // this candidate cannot beat it, and checking one byte is much
-                // cheaper than checking the run.
                 if ((bestLength == 0) or (b.at(candidate + bestLength) == b.at(at + bestLength))) {
                     var n = 0
                     while (((n < maxMatch) and (at + n < b.len)) and
@@ -193,9 +354,8 @@ proc deflateInto(b: Buf, var w: Bits) {
         }
 
         if (bestLength >= minMatch) {
-            putMatch(w, bestLength, bestDistance)
-            // Every position inside the match still has to go into the chain,
-            // or the next match cannot start there.
+            tokens.length.add(bestLength)
+            tokens.distance.add(bestDistance)
             var k = 1
             while (k < bestLength) {
                 val i = at + k
@@ -208,11 +368,222 @@ proc deflateInto(b: Buf, var w: Bits) {
             }
             at = at + bestLength
         } else {
-            putLiteral(w, b.at(at))
+            tokens.length.add(b.at(at))
+            tokens.distance.add(0)
             at = at + 1
         }
+
+        if (tokens.length.size >= tokensPerBlock) {
+            writeBlock(tokens, w, at >= b.len)
+            tokens = noTokens()
+        }
     }
-    putLiteral(w, 256)
+    // The last block, always — even when the previous one filled exactly, so
+    // that something carries the final-block bit.
+    writeBlock(tokens, w, true)
+}
+
+// ------------------------------------------------------- writing one block
+
+/// The order the code-length code's own lengths are written in. RFC 1951
+/// §3.2.7: the ones most likely to be zero go last, so trailing zeros can be
+/// dropped.
+val clOrder: List<Int> = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+/// A block's code lengths, run-length encoded into the code-length alphabet:
+/// 0-15 are lengths, 16 repeats the previous length 3-6 times, 17 is a run of
+/// 3-10 zeros and 18 a run of 11-138.
+///
+/// Answers the symbols and, for each, the extra bits that follow it.
+proc runLengths(lengths: List<Int>, var syms: List<Int>, var extras: List<Int>,
+                var extraBits: List<Int>) {
+    var i = 0
+    val n = lengths.size
+    while (i < n) {
+        val value = lengths[i]
+        var run = 1
+        while (((i + run) < n) and (lengths[i + run] == value)) { run = run + 1 }
+
+        if (value == 0) {
+            while (run >= 11) {
+                var take = run
+                if (take > 138) { take = 138 }
+                syms.add(18)
+                extras.add(take - 11)
+                extraBits.add(7)
+                i = i + take
+                run = run - take
+            }
+            while (run >= 3) {
+                var take = run
+                if (take > 10) { take = 10 }
+                syms.add(17)
+                extras.add(take - 3)
+                extraBits.add(3)
+                i = i + take
+                run = run - take
+            }
+            while (run > 0) {
+                syms.add(0)
+                extras.add(0)
+                extraBits.add(0)
+                i = i + 1
+                run = run - 1
+            }
+        } else {
+            syms.add(value)
+            extras.add(0)
+            extraBits.add(0)
+            i = i + 1
+            run = run - 1
+            while (run >= 3) {
+                var take = run
+                if (take > 6) { take = 6 }
+                syms.add(16)
+                extras.add(take - 3)
+                extraBits.add(2)
+                i = i + take
+                run = run - take
+            }
+            while (run > 0) {
+                syms.add(value)
+                extras.add(0)
+                extraBits.add(0)
+                i = i + 1
+                run = run - 1
+            }
+        }
+    }
+}
+
+func zeros(n: Int): List<Int> {
+    val out: List<Int> = []
+    for (i in 0..n) { out.add(0) }
+    return out
+}
+
+/// How many bits the tokens cost under a given pair of code tables.
+func dataBits(t: Tokens, litLen: List<Int>, distLen: List<Int>): Int {
+    var total = litLen[256]
+    var i = 0
+    while (i < t.length.size) {
+        if (t.distance[i] == 0) {
+            total = total + litLen[t.length[i]]
+        } else {
+            val lc = lengthCodeOf(t.length[i])
+            val dc = distCodeOf(t.distance[i])
+            total = ((total + litLen[257 + lc]) + lengthExtra[lc]) + distLen[dc] + distExtra[dc]
+        }
+        i = i + 1
+    }
+    return total
+}
+
+/// Write one block, as whichever of the two tables comes out shorter.
+proc writeBlock(t: Tokens, var w: Bits, last: Bool) {
+    val litFreq = zeros(286)
+    val distFreq = zeros(30)
+    litFreq.set(256, 1)
+    var i = 0
+    while (i < t.length.size) {
+        if (t.distance[i] == 0) {
+            litFreq.set(t.length[i], litFreq[t.length[i]] + 1)
+        } else {
+            val lc = 257 + lengthCodeOf(t.length[i])
+            litFreq.set(lc, litFreq[lc] + 1)
+            val dc = distCodeOf(t.distance[i])
+            distFreq.set(dc, distFreq[dc] + 1)
+        }
+        i = i + 1
+    }
+
+    val fixedLit = fixedLitLengths()
+    val fixedDist = fixedDistLengths()
+    val fixedCost = dataBits(t, fixedLit, fixedDist)
+
+    val litLen = codeLengths(litFreq, maxBits)
+    var distLen = codeLengths(distFreq, maxBits)
+    // A block with no matches has no distance code at all, and a block needs
+    // at least one for its table to be writable. One code of one bit, which is
+    // the incomplete code every decoder makes an exception for and which zlib
+    // writes for the same reason.
+    var anyDist = false
+    for (n in distLen) {
+        if (n > 0) { anyDist = true }
+    }
+    if (not anyDist) { distLen.set(0, 1) }
+
+    var hlit = 286
+    while ((hlit > 257) and (litLen[hlit - 1] == 0)) { hlit = hlit - 1 }
+    var hdist = 30
+    while ((hdist > 1) and (distLen[hdist - 1] == 0)) { hdist = hdist - 1 }
+
+    val together: List<Int> = []
+    for (k in 0..hlit) { together.add(litLen[k]) }
+    for (k in 0..hdist) { together.add(distLen[k]) }
+
+    val syms: List<Int> = []
+    val extras: List<Int> = []
+    val extraBits: List<Int> = []
+    runLengths(together, syms, extras, extraBits)
+
+    val clFreq = zeros(19)
+    for (sym in syms) { clFreq.set(sym, clFreq[sym] + 1) }
+    val clLen = codeLengths(clFreq, 7)
+
+    var hclen = 19
+    while ((hclen > 4) and (clLen[clOrder[hclen - 1]] == 0)) { hclen = hclen - 1 }
+
+    var tableCost = (5 + 5) + 4 + (3 * hclen)
+    var k = 0
+    while (k < syms.size) {
+        tableCost = (tableCost + clLen[syms[k]]) + extraBits[k]
+        k = k + 1
+    }
+    val dynamicCost = tableCost + dataBits(t, litLen, distLen)
+
+    w.put(last ? 1 : 0, 1)
+    if (fixedCost <= dynamicCost) {
+        w.put(1, 2)
+        emit(t, w, canonical(fixedLit), fixedLit, canonical(fixedDist), fixedDist)
+        return
+    }
+
+    w.put(2, 2)
+    w.put(hlit - 257, 5)
+    w.put(hdist - 1, 5)
+    w.put(hclen - 4, 4)
+    for (j in 0..hclen) { w.put(clLen[clOrder[j]], 3) }
+
+    val clCode = canonical(clLen)
+    var m = 0
+    while (m < syms.size) {
+        w.putCode(clCode[syms[m]], clLen[syms[m]])
+        if (extraBits[m] > 0) { w.put(extras[m], extraBits[m]) }
+        m = m + 1
+    }
+    emit(t, w, canonical(litLen), litLen, canonical(distLen), distLen)
+}
+
+/// The tokens themselves, under whichever table was chosen.
+proc emit(t: Tokens, var w: Bits, litCode: List<Int>, litLen: List<Int>,
+          distCode: List<Int>, distLen: List<Int>) {
+    var i = 0
+    while (i < t.length.size) {
+        if (t.distance[i] == 0) {
+            val sym = t.length[i]
+            w.putCode(litCode[sym], litLen[sym])
+        } else {
+            val lc = lengthCodeOf(t.length[i])
+            w.putCode(litCode[257 + lc], litLen[257 + lc])
+            if (lengthExtra[lc] > 0) { w.put(t.length[i] - lengthBase[lc], lengthExtra[lc]) }
+            val dc = distCodeOf(t.distance[i])
+            w.putCode(distCode[dc], distLen[dc])
+            if (distExtra[dc] > 0) { w.put(t.distance[i] - distBase[dc], distExtra[dc]) }
+        }
+        i = i + 1
+    }
+    w.putCode(litCode[256], litLen[256])
 }
 
 // ----------------------------------------------------------------- stored
@@ -263,15 +634,21 @@ public func gzip(input: Buf): Buf {
 
     val body = buf((input.len / 2) + 64)
     val w = bits(body)
-    w.put(1, 1)          // the last block
-    w.put(1, 2)          // fixed Huffman
     deflateInto(input, w)
     w.align()
 
-    if (body.len >= input.len) {
+    // What a stored block would cost: the bytes themselves, plus five for each
+    // sixty-five-kilobyte chunk of header. Comparing against the raw length
+    // instead — which this did — makes the wrong choice on anything tiny,
+    // where a stored block is *bigger* than the compressed one: an empty input
+    // came out as five bytes of stored block where two bytes of fixed-code
+    // block would have said the same thing.
+    val chunks = (input.len / 65535) + 1
+    val storedCost = input.len + (5 * chunks)
+    if (body.len > storedCost) {
         // Compressing made it bigger, which is what happens to a PNG. Say so
         // in the format rather than by growing the page.
-        val plain = buf(input.len + 16)
+        val plain = buf(storedCost + 16)
         val sw = bits(plain)
         storedInto(input, sw)
         sw.align()
