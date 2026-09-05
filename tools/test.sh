@@ -7,6 +7,7 @@
 #
 #   guide     every snippet the guide promises, compiled
 #   sql       the database layer, against a real SQLite in memory
+#   gz        what the compressor produced, read by two decompressors
 #   units     the buffers, encodings, parser, router, renderer and diff
 #   lifetime  an application built, used, dropped — and leaving nothing
 #   leaks     a cycle built on purpose, which the audit must still see
@@ -106,6 +107,52 @@ found=$(cd build && ./leaks 2>&1)
   exit 1
 }
 echo "a cycle built on purpose is still reported as exactly one"
+
+# gzip, read by something that did not write it.
+#
+# `squeeze` checks what a Keal program can check about its own output — the
+# magic bytes, the sizes, the CRC-32 check value — and stops exactly where it
+# has to: there is no inflate here, so nothing in Keal can say the output is
+# *valid* gzip rather than plausible nonsense. This hands each file to a
+# decompressor nobody here wrote and compares what comes back with what went
+# in. Two of them, because agreeing with one implementation is weaker than
+# agreeing with two, and `gzip` and Python do not share a line of code.
+printf '%-8s ' "gz"
+gzchecked=0
+for raw in build/gz-*.raw; do
+  packed=${raw%.raw}.gz
+  name=$(basename "$raw" .raw)
+  gzip -dc < "$packed" > build/gz-back.tmp 2>/dev/null || {
+    echo "FAILED — the system gzip would not read what we produced for $name."
+    echo "  That is the whole point of this step: the output looked right to us."
+    exit 1
+  }
+  cmp -s "$raw" build/gz-back.tmp || {
+    echo "FAILED — $name decompressed to something else."
+    echo "  $(wc -c < "$raw") bytes in, $(wc -c < build/gz-back.tmp) bytes back out."
+    exit 1
+  }
+  gzchecked=$((gzchecked + 1))
+done
+if command -v python3 >/dev/null 2>&1; then
+  python3 - <<'PYEOF' || exit 1
+import glob, gzip, sys
+for raw in sorted(glob.glob('build/gz-*.raw')):
+    packed = raw[:-4] + '.gz'
+    want = open(raw, 'rb').read()
+    try:
+        got = gzip.decompress(open(packed, 'rb').read())
+    except Exception as e:
+        print(f"FAILED — python refused {raw}: {e}"); sys.exit(1)
+    if got != want:
+        print(f"FAILED — python decompressed {raw} to {len(got)} bytes, not {len(want)}")
+        sys.exit(1)
+PYEOF
+  echo "$gzchecked files, decompressed by the system gzip and by python, both to the same bytes"
+else
+  echo "$gzchecked files, decompressed by the system gzip (no python for a second opinion)"
+fi
+rm -f build/gz-back.tmp
 
 # The C the backend emits, read strictly.
 #

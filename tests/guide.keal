@@ -254,6 +254,8 @@ assert(written() == "{\"id\":7,\"name\":\"Ada\",\"tags\":[\"a\",\"b\"]}", "the J
 // §11 — the server, adjusted but never started
 val s = site.serverOn(0)
 s.onStop = { -> println("(the guide's stop handler, which never runs here)") }
+s.compress = true
+s.compressFrom = 2048
 s.drainMs = 15000
 s.maxHead = 16 * 1024
 s.maxBody = 2 * 1024 * 1024

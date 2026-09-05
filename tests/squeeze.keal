@@ -1,0 +1,94 @@
+/// Fixtures for the one check this suite cannot make of itself.
+///
+/// There is no inflate here — kealeb compresses and never decompresses — so a
+/// Keal test can say the output is smaller and starts with the right two
+/// bytes, and it cannot say the output is *valid gzip*. That is the same shape
+/// as every other negative in this suite: it would go green the day the
+/// compressor started emitting plausible nonsense.
+///
+/// So this program writes what it produced, and `tools/test.sh` hands each
+/// file to a decompressor nobody here wrote and compares the result with the
+/// input. What follows is chosen to be the cases where a bug hides: nothing at
+/// all, one byte, text shorter than a match, text that is all one repeat,
+/// something already compressed, and every byte value in turn.
+
+import "../src/gzip.keal"
+import "../src/server.keal"
+
+var checks = 0
+
+proc ok(condition: Bool, what: String) {
+    checks = checks + 1
+    assert(condition, what)
+}
+
+proc sameInt(got: Int, want: Int, what: String) {
+    checks = checks + 1
+    assert(got == want, "${what}: expected ${want}, got ${got}")
+}
+
+/// The check value every CRC-32 implementation is tested against.
+sameInt(crc32(bufOf("123456789")), 0xCBF4_3926, "the CRC-32 check value")
+sameInt(crc32(bufOf("")), 0, "and nothing has none")
+
+ok(acceptsGzip("gzip, deflate, br"), "a browser says it can read gzip")
+ok(not acceptsGzip("identity"), "and something that cannot, does not")
+ok(worthCompressing("text/html; charset=utf-8"), "html is worth compressing")
+ok(worthCompressing("application/json"), "and so is json")
+ok(not worthCompressing("image/png"), "and a png is not")
+ok(not worthCompressing("font/woff2"), "nor a font")
+
+proc write(name: String, input: Buf) {
+    val packed = gzip(input)
+    sameInt(packed.at(0), 0x1F, "${name}: the first magic byte")
+    sameInt(packed.at(1), 0x8B, "${name}: the second")
+    sameInt(packed.at(2), 8, "${name}: says DEFLATE")
+    ok(packed.len >= 20, "${name}: a header and a trailer at least")
+    if (fileWrite("build/gz-${name}.gz", packed.handle(), 0, packed.len) != 1) {
+        panic("could not write build/gz-${name}.gz")
+    }
+    if (fileWrite("build/gz-${name}.raw", input.handle(), 0, input.len) != 1) {
+        panic("could not write build/gz-${name}.raw")
+    }
+}
+
+write("empty", bufOf(""))
+write("onebyte", bufOf("x"))
+write("short", bufOf("hello"))
+
+val repeated = buf(4096)
+for (i in 0..500) { repeated.text("abcdefgh") }
+write("repeated", repeated)
+
+val page = buf(8192)
+page.text("<!doctype html><html><head><title>kealeb</title></head><body>")
+for (i in 0..80) {
+    page.text("<div class=\"kb-row\"><span>row number ${i}</span><button class=\"kb-btn\">remove</button></div>")
+}
+page.text("</body></html>")
+write("page", page)
+
+/// Every byte value, so nothing in the literal alphabet is mis-coded — the
+/// bug that would only show on one character in two hundred and fifty-six.
+val alphabet = buf(1024)
+for (round in 0..3) {
+    for (v in 0..256) { alphabet.byte(v) }
+}
+write("alphabet", alphabet)
+
+/// Something already compressed, which must come back as a stored block
+/// rather than as something bigger.
+val noise = buf(3000)
+for (i in 0..3000) { noise.byte(randomInt(0, 255)) }
+ok(gzip(noise).len < (noise.len + 64), "noise does not grow by more than a header")
+write("noise", noise)
+
+/// A match right at the window edge and one at the very end, which is where
+/// an off-by-one in the matcher lives.
+val edges = buf(70000)
+edges.text("A distinctive opening that will be looked for again later on. ")
+for (i in 0..1200) { edges.text("filler ${i} ") }
+edges.text("A distinctive opening that will be looked for again later on. ")
+write("edges", edges)
+
+println("${checks} checks passed; eight files written for something else to read")

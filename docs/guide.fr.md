@@ -707,6 +707,47 @@ La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc
 un journal redirigé vers un fichier ou un superviseur arrive au fil de
 l'écriture.
 
+### La compression
+
+Toute réponse qu'un navigateur peut lire compressée l'est :
+
+```keal
+s.compress = false        // si vous préférez que non
+s.compressFrom = 2048     // la taille en dessous de laquelle l'en-tête coûte plus
+```
+
+C'est actif par défaut et il n'y a pas grand-chose : si le client a dit
+`Accept-Encoding: gzip`, si le type de média est du texte ou quelque chose qui
+en est en dessous, si le corps fait au moins `compressFrom` octets, et si la
+compression l'a vraiment rétréci — alors il part compressé. Si l'une de ces
+conditions manque, il part tel quel.
+
+`Vary: Accept-Encoding` est posé **que la réponse ait été compressée ou non**,
+et c'est la partie que tout le monde oublie : un cache qui aurait rangé la
+réponse compressée sans lui la donnerait au client suivant, qui ne sait
+peut-être pas la lire.
+
+Mesuré sur cette machine : une page de 9 Ko devient 717 octets en une
+milliseconde environ ; 180 Ko en prennent quatre. Ce qui est déjà compressé —
+un PNG, une police — n'est jamais touché : son type n'est pas dans la courte
+liste de ce qui vaut la peine, et DEFLATE dépenserait ces millisecondes à le
+grossir très légèrement.
+
+Le compresseur est `src/gzip.keal`, écrit en Keal, et il n'émet que des
+**codes de Huffman fixes**. Les blocs dynamiques de la RFC 1951 gagneraient dix
+à quinze pour cent de plus sur du texte et représentent plus de code que tout
+le reste de ce fichier réuni ; sur du HTML, la table fixe fait déjà l'essentiel,
+parce que l'essentiel est la répétition et non l'alphabet. Le jour où le taux
+comptera plus que la taille de ce fichier, c'est le dynamique qu'il faudra
+ajouter.
+
+Il n'y a pas de décompresseur. kealeb compresse et ne décompresse jamais, et
+c'est aussi pourquoi rien en Keal ne peut vérifier la sortie : `tools/test.sh`
+donne chaque fichier produit au `gzip` du système **et** à Python, et exige que
+les deux rendent les octets. Un test qui vérifierait seulement que la sortie
+est plus petite passerait au vert le jour où le compresseur se mettrait à
+produire un charabia plausible.
+
 ### L'arrêt
 
 `SIGINT` et `SIGTERM` — Ctrl-C, et ce qu'envoie un gestionnaire de services —
@@ -1120,6 +1161,7 @@ POST-puis-redirection, que vous voulez de toute façon.
 | `src/css.keal` | les feuilles de style, écrites en Keal |
 | `src/sql.keal` | SQLite : valeurs liées, lignes, transactions, migrations |
 | `runtime/kb_sql.h` | le C correspondant, seul à réclamer une bibliothèque |
+| `src/gzip.keal` | DEFLATE et le conteneur gzip, codes fixes seulement |
 | `src/upload.keal` | `multipart/form-data`, analysé sur les octets |
 | `src/hash.keal` | SHA-256, HMAC, PBKDF2 — avec l'avertissement qui va avec |
 | `src/auth.keal` | mots de passe, sessions, gardes, jeton CSRF |

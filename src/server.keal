@@ -13,6 +13,7 @@
 
 import "./bytes.keal"
 import "./ffi.keal"
+import "./gzip.keal"
 import "./http.keal"
 import "./router.keal"
 import "./text.keal"
@@ -98,6 +99,12 @@ public class Server(
     /// How long a connection may sit idle before it is closed, in
     /// milliseconds.
     public var idleMs: Int,
+    /// Compress a response when the client says it can read gzip, the body is
+    /// worth compressing, and it is big enough to be worth the header.
+    public var compress: Bool,
+    /// Below this many bytes, compressing is not worth the twenty-three bytes
+    /// a gzip stream costs before it says anything.
+    public var compressFrom: Int,
     /// How many requests one connection may serve before it is asked to go
     /// away. A bound, not a policy — it keeps a client from pinning a slot
     /// for ever.
@@ -402,6 +409,7 @@ public class Server(
                 this.onOpen(c.fd, req)
                 return this.consumeFrames(c)
             }
+            if (this.compress) { squeeze(req, res, this.compressFrom) }
             writeResponse(res, c.outBuf, keep, req.method == "HEAD")
             if (this.log) {
                 println("${req.method} ${req.target} → ${res.code} ${res.length()}b ${monoMs() - started}ms ${c.peer}")
@@ -587,6 +595,46 @@ public class Server(
     }
 }
 
+/// Which media types are worth compressing.
+///
+/// Text and the things that are text underneath. Everything else is already
+/// compressed — a PNG, a font, a video — and running it through DEFLATE spends
+/// milliseconds to make it very slightly bigger. The list is short on purpose:
+/// a type nobody serves is a type nobody has to read past, and anything not
+/// named here is simply sent as it is.
+public func worthCompressing(contentType: String): Bool {
+    val kind = contentType.toLower()
+    if (kind.startsWith("text/")) { return true }
+    for (named in ["application/json", "application/javascript", "application/xml",
+                   "application/wasm", "image/svg+xml", "application/x-ndjson"]) {
+        if (kind.startsWith(named)) { return true }
+    }
+    return false
+}
+
+/// Compress a response in place, when it is worth it.
+///
+/// `Vary: Accept-Encoding` goes on **whether or not** it compressed, and that
+/// is the part everybody forgets: a cache that stored the compressed answer
+/// without it will hand it to the next client along, who may not be able to
+/// read it. The header says the answer depends on what was asked for.
+package proc squeeze(req: Request, var res: Response, from: Int) {
+    if (res.upgrade) { return }
+    if (res.code == 304) { return }
+    if (not worthCompressing(res.headers.get("content-type") ?: "")) { return }
+    res.with("vary", "accept-encoding")
+    if (res.headers.containsKey("content-encoding")) { return }
+    if (res.body.len < from) { return }
+    if (not acceptsGzip(req.headerOr("accept-encoding", ""))) { return }
+
+    val packed = gzip(res.body)
+    // It can still come out bigger — short, high-entropy text does — and a
+    // response that grew is a slower page whatever the header says.
+    if (packed.len >= res.body.len) { return }
+    res.body = packed
+    res.with("content-encoding", "gzip")
+}
+
 /// A server over a routing table, with the defaults a development machine
 /// wants: localhost, one line of log per request, and limits that are large
 /// enough not to be met by accident and small enough to be a limit.
@@ -594,7 +642,7 @@ public func server(router: Router, port: Int = 8080, host: String = "127.0.0.1")
     val conns: Map<Int, Conn> = {}
     val timers: List<Timer> = []
     return Server(router, host, port, { r -> dispatch(router, r) }, true,
-                  64 * 1024, 8 * 1024 * 1024, 30000, 1000,
+                  64 * 1024, 8 * 1024 * 1024, 30000, true, 512, 1000,
                   { fd: Int, req: Request -> }, { fd: Int, message: String -> }, { fd: Int -> },
                   { -> }, 5000,
                   -1, conns, timers, false)

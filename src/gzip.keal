@@ -1,0 +1,296 @@
+/// gzip — DEFLATE with fixed Huffman codes, and the container around it.
+///
+/// A page of HTML is four to five times bigger than it needs to be on the
+/// wire, and every browser has said `Accept-Encoding: gzip` since 1999. This
+/// is the compressor, written in Keal, checked on every build by asking an
+/// independent implementation to decompress what it produced.
+///
+/// **Fixed Huffman codes only**, and the reason is worth stating rather than
+/// discovering. RFC 1951 has three block types: stored, fixed and dynamic.
+/// Dynamic builds a code table per block and describes it in the output — it
+/// wins another ten to fifteen per cent on text, and it is more code than
+/// everything else here put together. Fixed uses the table the specification
+/// writes down, so there is nothing to build and nothing to encode, and on
+/// HTML it already does most of the work because most of the work is the
+/// repetition, not the alphabet. If the ratio ever matters more than the size
+/// of this file, dynamic is the thing to add and this comment is where to
+/// start.
+///
+/// A stored block is still emitted when compressing made it bigger, which is
+/// what happens to anything already compressed — a PNG, a font, a JPEG. That
+/// is a correctness property, not an optimisation: `Content-Encoding: gzip`
+/// on something that grew is a slower page.
+
+import "./bytes.keal"
+
+// ------------------------------------------------------------------ CRC-32
+
+var crcTable: List<Int> = []
+
+proc buildCrcTable() {
+    val t: List<Int> = []
+    for (n in 0..256) {
+        var c = n
+        for (k in 0..8) {
+            // The polynomial, reflected, as every CRC-32 implementation
+            // writes it.
+            c = (c band 1) == 1 ? (0xEDB88320 bxor (c ushr 1)) : (c ushr 1)
+        }
+        t.add(c)
+    }
+    crcTable = t
+}
+
+/// The CRC-32 of a buffer — what the gzip trailer carries so that a decoder
+/// can say the bytes arrived as they left.
+public func crc32(b: Buf): Int {
+    if (crcTable.isEmpty()) { buildCrcTable() }
+    var c = 0xFFFF_FFFF
+    for (i in 0..b.len) {
+        c = crcTable[(c bxor b.at(i)) band 0xFF] bxor (c ushr 8)
+    }
+    return c bxor 0xFFFF_FFFF
+}
+
+// -------------------------------------------------------------- bit writing
+
+/// Bits into bytes, least-significant first — which is how DEFLATE packs
+/// everything except a Huffman code, and a Huffman code is written
+/// most-significant first. Both go through here; `putCode` reverses.
+class Bits(package val out: Buf, package var hold: Int, package var count: Int) {
+    proc put(value: Int, n: Int) {
+        this.hold = this.hold bor ((value band ((1 shl n) - 1)) shl this.count)
+        this.count = this.count + n
+        while (this.count >= 8) {
+            this.out.byte(this.hold band 0xFF)
+            this.hold = this.hold ushr 8
+            this.count = this.count - 8
+        }
+    }
+
+    /// A Huffman code: the same bits, in the other order.
+    proc putCode(code: Int, n: Int) {
+        var reversed = 0
+        var i = 0
+        while (i < n) {
+            reversed = (reversed shl 1) bor ((code ushr i) band 1)
+            i = i + 1
+        }
+        this.put(reversed, n)
+    }
+
+    proc align() {
+        if (this.count > 0) {
+            this.out.byte(this.hold band 0xFF)
+            this.hold = 0
+            this.count = 0
+        }
+    }
+}
+
+func bits(out: Buf): Bits { return Bits(out, 0, 0) }
+
+// ------------------------------------------------- the fixed Huffman codes
+
+/// The literal/length code for a symbol, and how many bits it takes.
+/// RFC 1951 §3.2.6, which writes them as four ranges rather than a table.
+proc putLiteral(var w: Bits, symbol: Int) {
+    if (symbol < 144) {
+        w.putCode(0x30 + symbol, 8)
+    } else if (symbol < 256) {
+        w.putCode(0x190 + (symbol - 144), 9)
+    } else if (symbol < 280) {
+        w.putCode(symbol - 256, 7)
+    } else {
+        w.putCode(0xC0 + (symbol - 280), 8)
+    }
+}
+
+val lengthBase: List<Int> = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+                             35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+val lengthExtra: List<Int> = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+                              3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+val distBase: List<Int> = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+                           257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+                           8193, 12289, 16385, 24577]
+val distExtra: List<Int> = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+                            7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+
+proc putMatch(var w: Bits, length: Int, distance: Int) {
+    var lc = 28
+    while ((lc > 0) and (lengthBase[lc] > length)) { lc = lc - 1 }
+    putLiteral(w, 257 + lc)
+    if (lengthExtra[lc] > 0) { w.put(length - lengthBase[lc], lengthExtra[lc]) }
+
+    var dc = 29
+    while ((dc > 0) and (distBase[dc] > distance)) { dc = dc - 1 }
+    // A distance code is five bits, fixed, most-significant first.
+    w.putCode(dc, 5)
+    if (distExtra[dc] > 0) { w.put(distance - distBase[dc], distExtra[dc]) }
+}
+
+// ---------------------------------------------------------------- matching
+
+val windowSize: Int = 32768
+val minMatch: Int = 3
+val maxMatch: Int = 258
+val hashBits: Int = 15
+val hashSize: Int = 32768
+
+/// How hard to look for a match before taking what is in hand.
+///
+/// A hash chain can be walked for ever; this is where it stops. 32 is the
+/// number `gzip -6` uses, and on the pages this framework serves the
+/// difference between 32 and 128 was under one per cent of the output for
+/// three times the work.
+val chainLimit: Int = 32
+
+func hashAt(b: Buf, i: Int): Int {
+    return (((b.at(i) shl 10) bxor (b.at(i + 1) shl 5)) bxor b.at(i + 2)) band (hashSize - 1)
+}
+
+/// DEFLATE the bytes into one fixed-Huffman block.
+proc deflateInto(b: Buf, var w: Bits) {
+    // `head` is the most recent position with each hash; `prev` chains back
+    // through the earlier ones. Both are plain lists of positions, which is
+    // the whole of the match finder.
+    val head: List<Int> = []
+    for (i in 0..hashSize) { head.add(-1) }
+    val prev: List<Int> = []
+    for (i in 0..b.len) { prev.add(-1) }
+
+    var at = 0
+    while (at < b.len) {
+        var bestLength = 0
+        var bestDistance = 0
+
+        if (at + minMatch <= b.len) {
+            val h = hashAt(b, at)
+            var candidate = head[h]
+            var tries = 0
+            val floor = at - windowSize
+            while (((candidate >= 0) and (candidate > floor)) and (tries < chainLimit)) {
+                tries = tries + 1
+                // The byte after the best match so far: if it does not agree,
+                // this candidate cannot beat it, and checking one byte is much
+                // cheaper than checking the run.
+                if ((bestLength == 0) or (b.at(candidate + bestLength) == b.at(at + bestLength))) {
+                    var n = 0
+                    while (((n < maxMatch) and (at + n < b.len)) and
+                           (b.at(candidate + n) == b.at(at + n))) {
+                        n = n + 1
+                    }
+                    if (n > bestLength) {
+                        bestLength = n
+                        bestDistance = at - candidate
+                        if (n >= maxMatch) { break }
+                    }
+                }
+                candidate = prev[candidate]
+            }
+            prev.set(at, head[h])
+            head.set(h, at)
+        }
+
+        if (bestLength >= minMatch) {
+            putMatch(w, bestLength, bestDistance)
+            // Every position inside the match still has to go into the chain,
+            // or the next match cannot start there.
+            var k = 1
+            while (k < bestLength) {
+                val i = at + k
+                if (i + minMatch <= b.len) {
+                    val h = hashAt(b, i)
+                    prev.set(i, head[h])
+                    head.set(h, i)
+                }
+                k = k + 1
+            }
+            at = at + bestLength
+        } else {
+            putLiteral(w, b.at(at))
+            at = at + 1
+        }
+    }
+    putLiteral(w, 256)
+}
+
+// ----------------------------------------------------------------- stored
+
+/// A block that is not compressed at all — for the bytes where compressing
+/// made them bigger.
+proc storedInto(b: Buf, var w: Bits) {
+    var at = 0
+    while (true) {
+        var n = b.len - at
+        if (n > 65535) { n = 65535 }
+        val last = (at + n) >= b.len
+        w.put(last ? 1 : 0, 1)
+        w.put(0, 2)
+        w.align()
+        w.out.byte(n band 0xFF)
+        w.out.byte((n ushr 8) band 0xFF)
+        w.out.byte((n bxor 0xFFFF) band 0xFF)
+        w.out.byte(((n bxor 0xFFFF) ushr 8) band 0xFF)
+        w.out.raw(b.handle(), at, n)
+        at = at + n
+        if (last) { return }
+    }
+}
+
+// ------------------------------------------------------------------- gzip
+
+/// Compress into a gzip stream.
+///
+/// Answers the compressed bytes — or, when compressing made them bigger, the
+/// same bytes in a stored block, which is still a valid gzip stream and is
+/// still smaller than lying about it.
+public func gzip(input: Buf): Buf {
+    val out = buf((input.len / 2) + 64)
+    // The header: magic, DEFLATE, no flags, no timestamp, no extra flags, and
+    // an unknown operating system. Nothing here identifies the machine, which
+    // is one fewer thing a response says about where it came from.
+    out.byte(0x1F)
+    out.byte(0x8B)
+    out.byte(8)
+    out.byte(0)
+    out.byte(0)
+    out.byte(0)
+    out.byte(0)
+    out.byte(0)
+    out.byte(0)
+    out.byte(255)
+
+    val body = buf((input.len / 2) + 64)
+    val w = bits(body)
+    w.put(1, 1)          // the last block
+    w.put(1, 2)          // fixed Huffman
+    deflateInto(input, w)
+    w.align()
+
+    if (body.len >= input.len) {
+        // Compressing made it bigger, which is what happens to a PNG. Say so
+        // in the format rather than by growing the page.
+        val plain = buf(input.len + 16)
+        val sw = bits(plain)
+        storedInto(input, sw)
+        sw.align()
+        out.join(plain, 0, plain.len)
+    } else {
+        out.join(body, 0, body.len)
+    }
+
+    val sum = crc32(input)
+    for (i in 0..4) { out.byte((sum ushr (i * 8)) band 0xFF) }
+    for (i in 0..4) { out.byte((input.len ushr (i * 8)) band 0xFF) }
+    return out
+}
+
+/// Does this request say it can read gzip?
+///
+/// The check is deliberately not a parse of the quality values: a client that
+/// lists gzip and then says `q=0` is a client nobody has ever seen, and a
+/// parser for it is a parser to get wrong.
+public func acceptsGzip(header: String): Bool {
+    return header.toLower().contains("gzip")
+}

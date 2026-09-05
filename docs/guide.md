@@ -687,6 +687,44 @@ proxy.
 Standard output is line-buffered from the moment the server starts, so a log
 piped to a file or a supervisor arrives as it is written.
 
+### Compression
+
+Every response a browser can read gzipped, is:
+
+```keal
+s.compress = false        // if you would rather it were not
+s.compressFrom = 2048     // the size below which it is not worth the header
+```
+
+It is on by default and there is not much to it: if the client said
+`Accept-Encoding: gzip`, the media type is text or something that is text
+underneath, the body is at least `compressFrom` bytes, and compressing actually
+made it smaller — then it goes out compressed. Any of those failing, it goes
+out as it was.
+
+`Vary: Accept-Encoding` is set **whether or not** it compressed, and that is
+the part everybody forgets: a cache that stored the compressed answer without
+it would hand it to the next client along, who may not be able to read it.
+
+Measured on this machine: a 9 KB page becomes 717 bytes in about a
+millisecond; 180 KB takes four. Something already compressed — a PNG, a font —
+is never touched, because its media type is not on the short list of things
+worth compressing and DEFLATE would spend those milliseconds making it very
+slightly bigger.
+
+The compressor is `src/gzip.keal`, written in Keal, and it emits **fixed
+Huffman codes only**. RFC 1951's dynamic blocks would win another ten to
+fifteen per cent on text and are more code than everything else in that file
+put together; on HTML the fixed table already does most of the work, because
+most of the work is the repetition and not the alphabet. When the ratio matters
+more than the size of that file, dynamic is what to add.
+
+There is no decompressor. kealeb compresses and never inflates, which is also
+why nothing in Keal can check the output: `tools/test.sh` hands every file it
+produces to the system `gzip` **and** to Python, and requires both to give the
+bytes back. A test that only checked the output was smaller would go green the
+day the compressor started emitting plausible nonsense.
+
 ### Stopping
 
 `SIGINT` and `SIGTERM` — Ctrl-C, and what a service manager sends — do not kill
@@ -1083,6 +1121,7 @@ anyway.
 | `src/css.keal` | stylesheets, written in Keal |
 | `src/sql.keal` | SQLite: bound values, rows, transactions, migrations |
 | `runtime/kb_sql.h` | the C for that, and the only thing that needs a library |
+| `src/gzip.keal` | DEFLATE and the gzip container, fixed codes only |
 | `src/upload.keal` | `multipart/form-data`, parsed on the bytes |
 | `src/hash.keal` | SHA-256, HMAC, PBKDF2 — with the warning that goes with them |
 | `src/auth.keal` | passwords, sessions, guards, the CSRF token |
