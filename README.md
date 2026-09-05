@@ -1,5 +1,12 @@
 # kealeb — web pages that stay on the server, written in Keal
 
+<!-- kealeb-band:start -->
+<p align="center">
+  <a href="https://github.com/geneacta/kealeb/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealeb/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-87%25-blue?style=flat-square&labelColor=2b2b2b"></a>
+</p>
+<!-- kealeb-band:end -->
+
 **[geneacta.github.io/kealeb](https://geneacta.github.io/kealeb/)** · [guide](https://geneacta.github.io/kealeb/guide.html) · [examples](https://geneacta.github.io/kealeb/examples.html) · [the Keal language](https://geneacta.github.io/keal/)
 
 A web framework for [Keal](https://github.com/geneacta/keal): routes and

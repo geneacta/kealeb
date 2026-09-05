@@ -259,6 +259,7 @@ def page(lang, filename, title, description, body, active=None, toc=None):
     <div class="nav-links">%(links)s</div>
   </div>
   <div class="nav-right">
+    <span class="badge">v%(version)s</span>
     <a class="btn-keal" href="%(keal)s">Keal ↗</a>
     <a class="btn-lang" href="%(other)s">%(other_label)s</a>
     <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
@@ -281,6 +282,7 @@ def page(lang, filename, title, description, body, active=None, toc=None):
         "canonical": canonical, "alt_en": alt_en, "alt_fr": alt_fr, "locale": locale,
         "prefix": prefix, "home": "index.html", "links": links,
         "other": other, "other_label": other_label, "keal": KEAL_SITE,
+        "version": version(),
         "body": layout,
         "foot0": foot[0], "foot1": foot[1], "foot2": foot[2], "foot3": foot[3],
     }
@@ -298,6 +300,17 @@ def write(lang, filename, text):
 def read(name):
     with open(os.path.join(ROOT, name), encoding="utf-8") as f:
         return f.read()
+
+
+def version():
+    """The number in `keal.toml`, which is what `keal add` pins — the same
+    source `ci/band.py` reads for the README's badge, so the site and the
+    README cannot say different things."""
+    for line in read("keal.toml").splitlines():
+        m = re.match(r'\s*version\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    raise SystemExit("site/build.py: keal.toml has no version")
 
 
 def counts():

@@ -8,6 +8,7 @@
 #   guide     every snippet the guide promises, compiled
 #   sql       the database layer, against a real SQLite in memory
 #   gz        what the compressor produced, read by two decompressors
+#   band      the README's badges, recounted — and required not to have drifted
 #   site      the pages, rebuilt — and required not to differ from what is committed
 #   units     the buffers, encodings, parser, router, renderer and diff
 #   lifetime  an application built, used, dropped — and leaving nothing
@@ -118,6 +119,17 @@ found=$(cd build && ./leaks 2>&1)
   exit 1
 }
 echo "a cycle built on purpose is still reported as exactly one"
+
+# The badge band at the top of the README.
+#
+# Keal's equivalent is deliberately not gated, because its second number counts
+# files across every repository its owner has and goes stale on its own. Both
+# of these numbers are in this repository, so the band can only go stale when
+# somebody here changes something — which is exactly when a gate should speak.
+if command -v python3 >/dev/null 2>&1; then
+  printf '%-8s ' "band"
+  python3 ci/band.py --check || exit 1
+fi
 
 # The site, and whether it still says what the repository says.
 #
