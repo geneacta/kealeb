@@ -6,6 +6,7 @@
 /// the socket it arrived on.
 
 import "./bytes.keal"
+import "./ffi.keal"
 import "./text.keal"
 import "./upload.keal"
 
@@ -26,8 +27,14 @@ public class Request(
     /// Header names lower-cased; a header sent twice arrives joined by `, `,
     /// which is what the protocol says it means.
     package val headers: Map<String, String>,
-    /// The body's bytes. Empty when there was none.
+    /// The body's bytes. Empty when there was none — and empty when the body
+    /// was too big to hold, in which case `bodyPath` names where it went.
     public var body: Buf,
+    /// A body the server spooled to a file rather than holding. Empty when the
+    /// body is in `body`, which is the ordinary case.
+    public var bodyPath: String,
+    /// How many bytes the body is, wherever it is.
+    public var bodySize: Int,
     /// What the route's pattern captured — `/user/{id}` puts `id` here.
     /// Filled by `withParams` before the handler sees the request; a handler
     /// is given the answer rather than the chance to change the question.
@@ -69,7 +76,25 @@ public class Request(
     /// One cookie, or `null`.
     public func cookie(name: String): String? { return this.cookies().get(name) }
 
-    /// The body as text. Bytes that are not UTF-8 arrive as U+FFFD.
+    /// Was the body too big to hold, and written to a file instead?
+    ///
+    /// When this is true, `text()`, `form()` and `parts()` have nothing to
+    /// read: the body is at `bodyPath` and is the handler's to do something
+    /// with — `saveBodyTo` moves it somewhere, and reading it in pieces is what
+    /// `openRead` is for. The file is deleted when the request is done, so a
+    /// handler that wants to keep it must say so before it returns.
+    public func spooled(): Bool { return not this.bodyPath.isEmpty() }
+
+    /// Move a spooled body to a path of your choosing. Answers whether it
+    /// worked, and false when the body was small enough to be in memory —
+    /// which `spooled` is how you tell.
+    public func saveBodyTo(path: String): Bool {
+        if (not this.spooled()) { return false }
+        return copyFile(this.bodyPath, path)
+    }
+
+    /// The body as text. Bytes that are not UTF-8 arrive as U+FFFD. Empty for
+    /// a spooled body, which is what `spooled` is for.
     public func text(): String { return this.body.all() }
 
     /// The body read as a form — `application/x-www-form-urlencoded`, which
@@ -142,7 +167,7 @@ public func request(method: String, target: String): Request {
     val headers: Map<String, String> = {}
     val params: Map<String, String> = {}
     return Request(method.toUpper(), target, percentDecode(path), parseForm(qs),
-                   "HTTP/1.1", headers, buf(16), params, "")
+                   "HTTP/1.1", headers, buf(16), "", 0, params, "")
 }
 
 /// Parse a request head — everything up to and not including the blank line.
@@ -180,7 +205,7 @@ public func parseHead(head: String): Request? {
     if (cut != null) { path = cut.first; qs = cut.second }
     val params: Map<String, String> = {}
     return Request(method.toUpper(), target, percentDecode(path), parseForm(qs),
-                   version, headers, buf(16), params, "")
+                   version, headers, buf(16), "", 0, params, "")
 }
 
 /// The same request, with the route's captures in place.
@@ -193,7 +218,29 @@ public func parseHead(head: String): Request? {
 /// mutation anywhere in it.
 public func withParams(req: Request, params: Map<String, String>): Request {
     return Request(req.method, req.target, req.path, req.query, req.version,
-                   req.headers, req.body, params, req.peer)
+                   req.headers, req.body, req.bodyPath, req.bodySize, params, req.peer)
+}
+
+/// Copy a file, in pieces, without holding it. What `saveBodyTo` is.
+public func copyFile(from: String, to: String): Bool {
+    val source = openRead(from)
+    if (source == 0) { return false }
+    val sink = openWrite(to)
+    if (sink == 0) {
+        closeRead(source)
+        return false
+    }
+    val piece = buf(262144)
+    piece.len = 262144
+    var ok = true
+    while (true) {
+        val got = readInto(source, piece.handle(), 0, 262144)
+        if (got <= 0) { break }
+        if (writeFrom(sink, piece.handle(), 0, got) != got) { ok = false; break }
+    }
+    closeRead(source)
+    closeWrite(sink)
+    return ok
 }
 
 // ------------------------------------------------------------------ ranges

@@ -8,12 +8,12 @@ not know what a header is, and does not decide anything.
 
 ```
               lines    what it is
-  Keal         6 295   the whole framework: HTTP, routing, the component
+  Keal         6 482   the whole framework: HTTP, routing, the component
                        tree, the renderer, stylesheets, JSON, WebSocket
                        framing, the scheduler, the session hub, the diff, the
                        SQLite layer, gzip, and the hashing security
                        rests on
-  C              766   sockets, poll, byte blobs, and the SQLite door —
+  C              786   sockets, poll, byte blobs, and the SQLite door —
                        two headers, no .c file
   JavaScript     132   the browser client: open a socket, report an event,
                        apply six kinds of patch
@@ -223,6 +223,12 @@ listener closes so a new client goes elsewhere, a request already being
 answered is finished, connections that owe nothing are closed at once, and
 whatever is left after `drainMs` is closed anyway with a line saying so.
 
+**Bodies bigger than memory.** A request body over a megabyte is written to a
+file as it arrives; the handler is told it was spooled and given the path.
+Posting sixty megabytes costs **2.5 MB resident** — it was 133 MB until the
+draining moved inside the read loop, because the kernel hands over as much as
+it has and the read buffer grew to hold all of it.
+
 **Files bigger than the machine.** Under a megabyte a file is read into memory,
 where it can be compressed; above it the server opens it and sends it as the
 socket takes it, a quarter of a megabyte at a time. Serving the same
@@ -318,10 +324,9 @@ is none.
 
 The honest list.
 
-* **Streaming a request body.** It is read whole into memory before a handler
-  sees it, bounded by `maxBody`. Not a problem at the sizes a form has, and a
-  problem for a file somebody uploads by the gigabyte. Responses stream; bodies
-  do not, yet.
+* **Parsing multipart out of a spooled body.** A body over `spoolFrom` goes to
+  a file, and `parts()` reads memory — so a form with a very large file in it
+  needs a handler that parses the file itself.
 * **Any database but SQLite.** Postgres would be `libpq` through the same C
   door, or its wire protocol written in Keal — a project of its own either way.
 * **Audited cryptography.** `src/hash.keal` is hand-written and says so at the

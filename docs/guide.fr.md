@@ -526,6 +526,51 @@ Tout chemin comportant un segment `..`, une barre initiale, une barre inverse
 ou un composant caché est un **403** — refusé, pas normalisé. Normaliser un
 chemin hostile, c'est ainsi qu'on sort d'un répertoire.
 
+### Les corps plus gros que la mémoire
+
+Un corps de requête de plus d'un mégaoctet est écrit dans un fichier au fur et
+à mesure plutôt que tenu :
+
+```keal
+s.spoolFrom = 4 * 1024 * 1024      // où passe la ligne
+s.spoolDir = "/var/tmp"            // où vont les fichiers
+s.maxBody = 512 * 1024 * 1024      // coûte maintenant du disque, pas de la mémoire
+```
+
+Un gestionnaire sait lequel des deux il a reçu :
+
+```keal
+site.post("/upload", { req ->
+    if (req.spooled()) {
+        req.saveBodyTo("uploads/${epochS()}.bin")
+        redirect("/", 303)
+    } else {
+        ranger(req.body)
+        redirect("/", 303)
+    }
+})
+```
+
+`text()`, `form()` et `parts()` lisent le corps en mémoire, donc un corps
+déversé n'a rien à leur donner : il est à `bodyPath`, et il appartient au
+gestionnaire de le déplacer, le copier ou le lire par morceaux. **Le fichier
+est supprimé quand la requête est finie**, donc un gestionnaire qui veut le
+garder doit le dire avant de revenir — c'est ce qu'est `saveBodyTo`.
+
+Mesuré, en postant soixante mégaoctets : **2,5 Mo résidents**. C'était 133 Mo
+quand la vidange se faisait après la boucle de lecture plutôt que dedans — le
+noyau donne tout ce qu'il a, donc un corps arrive plus vite qu'un tour de
+boucle et le tampon de lecture grossissait pour tout tenir. Ce cadriciel a eu ce
+défaut pendant une dizaine de minutes, et le chiffre est ici parce que
+« au fil de l'eau » est un mot et 130 Mo n'en est pas un.
+
+Ce que cela ne fait pas : un corps **multipart** au-delà du seuil est déversé en
+entier, et `parts()` ne sait pas le lire. Un formulaire avec un gros fichier
+dedans veut donc un `spoolFrom` au-dessus du plus gros formulaire que vous
+acceptez, ou un gestionnaire qui analyse le fichier lui-même. Analyser du
+multipart depuis un fichier est la pièce qui manque, et elle est nommée ici
+plutôt que découverte.
+
 ### Les fichiers plus gros que la machine
 
 Un fichier de moins d'un mégaoctet est lu en mémoire ; au-delà, le serveur

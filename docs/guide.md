@@ -513,6 +513,49 @@ Any path with a `..` segment, a leading `/`, a backslash, or a dotfile
 component is a **403** — refused, not normalised. Normalising a hostile path
 is how a directory gets escaped.
 
+### Bodies bigger than memory
+
+A request body over a megabyte is written to a file as it arrives rather than
+held:
+
+```keal
+s.spoolFrom = 4 * 1024 * 1024      // where the line is
+s.spoolDir = "/var/tmp"            // where the files go
+s.maxBody = 512 * 1024 * 1024      // now costs disk, not memory
+```
+
+A handler is told which it got:
+
+```keal
+site.post("/upload", { req ->
+    if (req.spooled()) {
+        req.saveBodyTo("uploads/${epochS()}.bin")
+        redirect("/", 303)
+    } else {
+        store(req.body)
+        redirect("/", 303)
+    }
+})
+```
+
+`text()`, `form()` and `parts()` read the body in memory, so a spooled body has
+nothing for them: it is at `bodyPath`, and it is the handler's to move, copy or
+read in pieces. **The file is deleted when the request is done**, so a handler
+that wants to keep it must say so before it returns — `saveBodyTo` is that.
+
+Measured, posting sixty megabytes: **2.5 MB resident**. It was 133 MB when the
+draining happened after the read loop rather than inside it — the kernel hands
+over as much as it has, so a body arrives faster than one turn of the loop and
+the read buffer grew to hold all of it. That is a bug this framework had for
+about ten minutes, and the number is here because "streaming" is a word and 130
+MB is not.
+
+What this does not do: a **multipart** body over the threshold is spooled
+whole, and `parts()` cannot read it. A form with a large file in it therefore
+wants `spoolFrom` above the largest form you accept, or a handler that parses
+the file itself. Parsing multipart out of a file is the missing piece, and it
+is named here rather than discovered.
+
 ### Files bigger than the machine
 
 A file under a megabyte is read into memory; above that the server opens it and

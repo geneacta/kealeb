@@ -135,5 +135,11 @@ public extern func seekTo(h: Int, off: Int): Int = "kb_seek_to"
 public extern func readInto(h: Int, blob: Int, off: Int, len: Int): Int = "kb_read_into"
 /// Give the handle back.
 public extern proc closeRead(h: Int) = "kb_close_read"
+/// Open a file for writing in pieces. A handle, or 0.
+public extern func openWrite(path: borrow String): Int = "kb_open_write"
+/// Append a piece. How many bytes, or -1.
+public extern func writeFrom(h: Int, blob: Int, off: Int, len: Int): Int = "kb_write_from"
+/// Close it, which is also what flushes it.
+public extern proc closeWrite(h: Int) = "kb_close_write"
 /// When a file last changed, in seconds since the epoch, or -1.
 public extern func fileMtime(path: borrow String): Int = "kb_file_mtime"

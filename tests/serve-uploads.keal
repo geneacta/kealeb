@@ -1,0 +1,55 @@
+/// A server the client test posts to, because the spooling path has no other
+/// test.
+///
+/// A body over the threshold never exists in memory: it is written to a file
+/// as it arrives, and the handler is given the path. That is a state machine
+/// across several turns of the loop — the head parsed in one, the body drained
+/// over many, the answer written in another — and the ways it can go wrong are
+/// a truncated file, a body that never completes, and a temporary file nobody
+/// deletes. None of those is visible from inside Keal.
+///
+/// It is not run by the suite's ordinary loop, which runs each test to
+/// completion; a program that serves does not complete. The `serve-` in the
+/// name is what says so — a marker in the filename rather than a list in the
+/// runner that could drift from the files, and rather than looking for a call
+/// to `run` in the source, which is what it did until `db.run` matched.
+
+import "../kealeb.keal"
+
+val site = app("uploads")
+
+proc main() {
+    site.post("/upload", { req ->
+        if (req.spooled()) {
+            val kept = "build/uploaded.bin"
+            val saved = req.saveBodyTo(kept)
+            text("spooled ${req.bodySize} ${saved} ${kept}")
+        } else {
+            text("held ${req.body.len} ${req.body.at(0)}")
+        }
+    })
+
+    site.post("/form", { req ->
+        val doc = req.file("doc")
+        if (doc == null) { text("no file") } else { text("file ${doc.size()} ${doc.safeName()}") }
+    })
+
+    site.get("/leftovers", { req ->
+        val here = listDir("build")
+        var n = 0
+        if (here != null) {
+            for (name in here) {
+                if (name.startsWith("kb-body-")) { n = n + 1 }
+            }
+        }
+        text("${n}")
+    })
+
+    val s = site.serverOn(args().size > 0 ? (args()[0].toInt() ?: 8080) : 8080)
+    s.spoolFrom = 65536
+    s.spoolDir = "build"
+    s.maxBody = 128 * 1024 * 1024
+    // The log stays on: the line it prints when it binds is how the test knows
+    // the port, and knows the server is ready rather than sleeping and hoping.
+    s.run()
+}

@@ -188,7 +188,7 @@ function start(name, extra = [], within = 8000) {
       reject(expected(
         `the ${name} example never said it was listening, within ${within}ms.\n` +
         `    What it printed instead: ${seen ? JSON.stringify(seen) : '(nothing at all)'}\n` +
-        `    Run it by hand to see why: tools/build.sh examples/${name}.keal && build/${name} 0`));
+        `    Run it by hand to see why: tools/build.sh ${name.startsWith('serve-') ? 'tests' : 'examples'}/${name}.keal && build/${name} 0`));
     }, within);
     server.stdout.on('data', (d) => {
       seen += String(d);
@@ -209,7 +209,7 @@ function start(name, extra = [], within = 8000) {
       clearTimeout(giveUp);
       reject(expected(
         `the ${name} example exited with status ${code} before it said it was listening.\n` +
-        `    Run it by hand to see why: tools/build.sh examples/${name}.keal && build/${name} 0`));
+        `    Run it by hand to see why: tools/build.sh ${name.startsWith('serve-') ? 'tests' : 'examples'}/${name}.keal && build/${name} 0`));
     });
   });
 }
@@ -270,6 +270,7 @@ async function live(name, port) {
 async function main() {
   await stopping();
   await serving();
+  await uploading();
   await counting();
   // The notes example is the one with a keyed list, and it keeps its notes in
   // SQLite — so on a machine with no library to link, that half is skipped and
@@ -341,6 +342,50 @@ async function serving() {
   ]);
   ok(Buffer.from(a).equals(big) && Buffer.from(b).equals(big),
      'two downloads at once each get the whole file');
+}
+
+// --------------------------------------------------------- bodies too big
+//
+// A body over the threshold is written to a file as it arrives and never
+// exists in memory. What can go wrong is a truncated file, a request that
+// never completes, or a temporary file nobody deletes — and none of the three
+// is visible from inside Keal.
+async function uploading() {
+  const { port } = await start('serve-uploads');
+  const post = (path, body, headers) =>
+    fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body, headers });
+
+  const small = Buffer.alloc(1000, 0x41);
+  same(await (await post('/upload', small)).text(), 'held 1000 65',
+       'a small body is held in memory and reaches the handler');
+
+  // Well over the 64 KB threshold, with a pattern so a truncation shows.
+  const big = Buffer.alloc(5 * 1024 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 11 + 5) & 0xff;
+  const said = await (await post('/upload', big)).text();
+  same(said, `spooled ${big.length} true build/uploaded.bin`,
+       'a large one is spooled and the handler is given the file');
+  const kept = readFileSync('build/uploaded.bin');
+  ok(kept.equals(big), 'and the file is the body, byte for byte');
+
+  // A second one on the same connection, to prove the state machine came back
+  // to where it started rather than half-way through the last body.
+  same(await (await post('/upload', small)).text(), 'held 1000 65',
+       'and the connection is good for another request afterwards');
+
+  // multipart still works below the threshold, which is where a form lives.
+  const boundary = '----kbTest' + Math.random().toString(16).slice(2);
+  const part = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="doc"; filename="a b.txt"\r\n\r\n`),
+    Buffer.from('some content'),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const form = await (await post('/form', part,
+    { 'Content-Type': `multipart/form-data; boundary=${boundary}` })).text();
+  same(form, 'file 12 a_b.txt', 'a form with a file in it still arrives as parts');
+
+  same(await (await fetch(`http://127.0.0.1:${port}/leftovers`)).text(), '0',
+       'and no temporary file was left behind by any of it');
 }
 
 // ------------------------------------------------------------- stopping

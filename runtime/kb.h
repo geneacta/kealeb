@@ -531,6 +531,26 @@ static inline int64_t kb_read_into(int64_t h, int64_t blob, int64_t off, int64_t
     return (int64_t)got;
 }
 
+/* Open for writing, and append to it. The other half of reading a file in
+ * pieces: a request body too big to hold goes here as it arrives. */
+static inline int64_t kb_open_write(const char *path) {
+    FILE *f = fopen(path, "wb");
+    return (int64_t)(intptr_t)f;
+}
+
+static inline int64_t kb_write_from(int64_t h, int64_t blob, int64_t off, int64_t len) {
+    if (!h || !blob || off < 0 || len <= 0) return -1;
+    int64_t n = kb_blob_size(blob);
+    if (off >= n) return -1;
+    if (len > n - off) len = n - off;
+    size_t put = fwrite((const unsigned char *)blob + off, 1, (size_t)len, (FILE *)(intptr_t)h);
+    return (int64_t)put;
+}
+
+static inline void kb_close_write(int64_t h) {
+    if (h) fclose((FILE *)(intptr_t)h);
+}
+
 static inline void kb_close_read(int64_t h) {
     if (h) fclose((FILE *)(intptr_t)h);
 }

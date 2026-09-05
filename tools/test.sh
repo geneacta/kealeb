@@ -54,6 +54,16 @@ for t in tests/*.keal; do
   # the same thing twice while meaning less the second time.
   [ "$name" = "lifetime" ] && continue
   [ "$name" = "leaks" ] && continue
+  # A test that serves does not complete, so the loop builds it and leaves it
+  # for `tests/client.mjs` to drive. The name says which, rather than a list
+  # here that could drift from the files — and rather than looking for a call
+  # to `run` in the source, which is what this did until `db.run` matched.
+  case "$name" in
+    serve-*)
+      sh tools/build.sh "$t" >/dev/null
+      continue
+      ;;
+  esac
   # A test that imports the database layer needs the one library kealeb does
   # not vendor. Read out of the file rather than from a list here, so the two
   # cannot drift.
@@ -255,6 +265,8 @@ if command -v node >/dev/null 2>&1; then
   # failure with a compiler error rather than a spawn error with a stack.
   sh tools/build.sh examples/counter.keal >/dev/null
   sh tools/build.sh examples/files.keal >/dev/null
+  sh tools/build.sh tests/serve-uploads.keal >/dev/null
+  rm -f build/kb-body-*.tmp build/uploaded.bin
   if [ "$HAVE_SQLITE" = "yes" ]; then
     sh tools/build.sh examples/notes.keal -lsqlite3 >/dev/null
     rm -f build/notes.db
