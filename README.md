@@ -1,5 +1,7 @@
 # kealeb — web pages that stay on the server, written in Keal
 
+**[geneacta.github.io/kealeb](https://geneacta.github.io/kealeb/)** · [guide](https://geneacta.github.io/kealeb/guide.html) · [examples](https://geneacta.github.io/kealeb/examples.html) · [the Keal language](https://geneacta.github.io/keal/)
+
 A web framework for [Keal](https://github.com/geneacta/keal): routes and
 handlers like Spring Boot, pages built out of components like Vaadin, and
 **the whole thing is `.keal` files**. The C underneath opens sockets, moves
@@ -280,9 +282,14 @@ Then open `http://127.0.0.1:8080`.
 first: the whole C surface is `static inline` in one header, so `keal build`
 compiles it as part of the program.
 
+* **[kealeb.dev-ish: the site](https://geneacta.github.io/kealeb/)** — the same
+  documents, laid out, in [English](https://geneacta.github.io/kealeb/guide.html)
+  and in [French](https://geneacta.github.io/kealeb/fr/guide.html).
 * **[The guide](docs/guide.md)** — routes, pages, live pages, the widgets,
   static files, sessions, testing, deployment. Read this one.
 * **[Le guide, en français](docs/guide.fr.md)** — the same walkthrough.
+* **[The Keal language](https://geneacta.github.io/keal/)** — what this is
+  written in, and why it can be.
 
 ## The tests
 

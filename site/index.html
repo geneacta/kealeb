@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kealeb — web pages that stay on the server</title>
+<meta name="description" content="A web framework for Keal: Spring Boot&#x27;s routes, Vaadin&#x27;s pages, and the whole of both in .keal files.">
+<link rel="canonical" href="https://geneacta.github.io/kealeb/index.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealeb/index.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealeb/fr/index.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealeb/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kealeb">
+<meta property="og:locale" content="en_GB">
+<meta property="og:title" content="kealeb — web pages that stay on the server">
+<meta property="og:description" content="A web framework for Keal: Spring Boot&#x27;s routes, Vaadin&#x27;s pages, and the whole of both in .keal files.">
+<meta property="og:url" content="https://geneacta.github.io/kealeb/index.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="kealeb — web pages that stay on the server">
+<meta name="twitter:description" content="A web framework for Keal: Spring Boot&#x27;s routes, Vaadin&#x27;s pages, and the whole of both in .keal files.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a class="wordmark" href="index.html">kealeb</a>
+    <div class="nav-links"><a href="index.html" class="tab-active">Home</a><a href="guide.html">Guide</a><a href="examples.html">Examples</a></div>
+  </div>
+  <div class="nav-right">
+    <a class="btn-keal" href="https://geneacta.github.io/keal/">Keal ↗</a>
+    <a class="btn-lang" href="fr/index.html">Français</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div>
+    <h1>Web pages that stay on the server</h1>
+    <p class="sub">Routes and handlers like Spring Boot, pages built out of components like Vaadin — and the whole of both is <code>.keal</code> files. The C underneath opens sockets and moves bytes. It does not decide anything.</p>
+    <div class="hero-cta"><a class="cta" href="guide.html">Read the guide</a>
+      <a class="cta2" href="https://github.com/geneacta/kealeb">On GitHub</a></div>
+  </div>
+  <div class="hero-code"><pre class="mono">import &quot;kealeb/kealeb.keal&quot;
+
+val site = app(&quot;Hello&quot;)
+
+site.page(&quot;/&quot;, { req -&gt; column([
+    h1(&quot;Hello&quot;),
+    p(&quot;from Keal&quot;)
+])})
+
+site.run(8080)</pre></div>
+</section>
+<section class="counts-wrap"><table class="counts"><thead><tr><th></th><th>lines</th><th>what it is</th></tr></thead><tbody><tr><td class="lang">Keal</td><td class="n">6&thinsp;482</td><td>the whole framework: HTTP, routing, the component tree, the renderer, stylesheets, JSON, WebSocket framing, gzip, the scheduler, the session hub, the diff, the SQLite layer and the hashing security rests on</td></tr><tr><td class="lang">C</td><td class="n">786</td><td>sockets, poll, byte blobs, files in pieces — two headers, no .c file</td></tr><tr><td class="lang">JavaScript</td><td class="n">143</td><td>the browser client: open a socket, report an event, apply a patch</td></tr></tbody></table></section>
+<section class="live">
+  <h2>A live page, and the whole of what a click costs</h2>
+  <div class="live-grid"><pre class="mono">site.livePage(&quot;/&quot;, { req -&gt;
+    var count = 0
+    view({ -&gt; column([
+        h1(&quot;Clicked ${count} times&quot;),
+        button(&quot;Click me&quot;, { e -&gt; count = count + 1 })
+    ]) })
+})</pre><div class="patch"><pre class="mono">{&quot;p&quot;:[[&quot;t&quot;,&quot;0.0.0&quot;,&quot;Clicked 1 times&quot;]]}</pre><p>One patch. The browser sets one text node. There is no JSON schema to write, no endpoint, no client state, and nothing to keep in sync — <code>count</code> is an ordinary Keal variable and the page is a function of it.</p></div></div>
+</section>
+<section class="cards4"><div class="card"><h3>One thread, no locks</h3><p>Every socket is non-blocking, one <code>poll</code> drives everything, and a handler runs with nothing else running. Session state is an ordinary Keal object and a data race is not a thing that can be written here. The cost is stated rather than hidden: a handler that blocks blocks the server.</p></div><div class="card"><h3>Only the difference travels</h3><p>A live page keeps its tree on the server. An event runs a handler, the tree is built again, the two are compared, and what crosses the socket is the list of changes — seven kinds of patch, each one call in a browser.</p></div><div class="card"><h3>Nothing is linked unless you ask</h3><p>No dependencies. SQLite arrives with a second import and one flag; a program that never opens a database never links against one. The hashing, the compression and the WebSocket framing are Keal.</p></div><div class="card"><h3>Checked by things that did not write it</h3><p>SHA-256, HMAC and PBKDF2 against the vectors their specifications published. The gzip output handed to the system <code>gzip</code> and to Python, both required to give the bytes back. The browser client run against a real server on every build.</p></div></section>
+
+<footer class="foot">
+  <div class="foot-l">A web framework for Keal: routes, pages, and state that stays on the server. Built by Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealeb">Source on GitHub</a>
+    <a href="https://geneacta.github.io/keal/">The Keal language</a>
+    <a href="https://github.com/geneacta/kealeb/issues">Issues</a>
+  </div>
+</footer>
+</div>
+</body>
+</html>

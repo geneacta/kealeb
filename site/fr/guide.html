@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Le guide de kealeb</title>
+<meta name="description" content="Les routes, les pages, les pages vivantes, les composants, une base de données, la sécurité, et ce que le cadriciel ne fera pas.">
+<link rel="canonical" href="https://geneacta.github.io/kealeb/fr/guide.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealeb/guide.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealeb/fr/guide.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealeb/guide.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kealeb">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="Le guide de kealeb">
+<meta property="og:description" content="Les routes, les pages, les pages vivantes, les composants, une base de données, la sécurité, et ce que le cadriciel ne fera pas.">
+<meta property="og:url" content="https://geneacta.github.io/kealeb/fr/guide.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Le guide de kealeb">
+<meta name="twitter:description" content="Les routes, les pages, les pages vivantes, les composants, une base de données, la sécurité, et ce que le cadriciel ne fera pas.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a class="wordmark" href="index.html">kealeb</a>
+    <div class="nav-links"><a href="index.html">Accueil</a><a href="guide.html" class="tab-active">Le guide</a><a href="examples.html">Exemples</a></div>
+  </div>
+  <div class="nav-right">
+    <a class="btn-keal" href="https://geneacta.github.io/keal/">Keal ↗</a>
+    <a class="btn-lang" href="../guide.html">English</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
+  </div>
+</nav>
+<div class="dgrid"><div></div><div class="dmain prose"><div class="doc-head"><h1>Le guide de kealeb</h1></div><p>Tout ce que le cadriciel sait faire, dans l'ordre où vous le rencontrerez. Une demi-heure d'un bout à l'autre. Chaque extrait ci-dessous compile ; les versions longues sont dans <a href="https://github.com/geneacta/kealeb/blob/main/examples"><code>examples/</code></a>.</p>
+<p><em>Également en ligne, mis en page : <a href="https://geneacta.github.io/kealeb/">geneacta.github.io/kealeb</a> — et le langage dans lequel tout ceci est écrit, <a href="https://geneacta.github.io/keal/">Keal</a>.</em></p>
+<hr>
+<h2 id="1-un-programme">1. Un programme</h2>
+<pre class="lang-keal"><code>import &quot;kealeb/kealeb.keal&quot;
+
+val site = app(&quot;Mon site&quot;)
+
+site.page(&quot;/&quot;, { req -&gt; column([
+    h1(&quot;Bonjour&quot;),
+    p(&quot;depuis Keal&quot;)
+])})
+
+site.run(8080)</code></pre>
+<pre class="lang-sh"><code>tools/build.sh bonjour.keal
+build/bonjour</code></pre>
+<p><code>app(titre)</code> crée une application. <code>run(port)</code> sert jusqu'à l'arrêt du processus. Entre ces deux lignes, on déclare ce que le site répond.</p>
+<p>L'import est le parapluie : tout ce guide est visible après cette ligne. Un programme qui en veut moins importe un seul module — <code>import "kealeb/src/http.keal"</code> amène la requête et la réponse, et rien d'autre.</p>
+<h2 id="2-utiliser-kealeb-depuis-votre-propre-projet">2. Utiliser kealeb depuis votre propre projet</h2>
+<p>Le guide, jusqu'ici, suppose que vous êtes dans ce dépôt. Ce n'est pas obligatoire. kealeb est un paquet Keal, et un projet qui le veut le dit :</p>
+<pre class="lang-toml"><code># keal.toml
+[package]
+name = &quot;monprojet&quot;
+version = &quot;0.1.0&quot;
+
+[dependencies]
+kealeb = { git = &quot;https://github.com/geneacta/kealeb&quot;, tag = &quot;v0.1.0&quot; }</code></pre>
+<pre class="lang-sh"><code>keal fetch                                  # le met dans .keal/deps/kealeb
+.keal/deps/kealeb/tools/build.sh app.keal   # la sortie va dans *votre* build/</code></pre>
+<pre class="lang-keal"><code>import &quot;dep:kealeb/kealeb.keal&quot;</code></pre>
+<p>Le script de construction est la seule partie qui n'est pas simplement <code>keal build</code>, et à cause d'un seul drapeau : la surface C de kealeb est un en-tête, et il faut dire au compilateur où il est. Le lancer depuis la dépendance s'en charge, et pose l'exécutable chez vous plutôt que chez elle. Si vous préférez voir la commande entière :</p>
+<pre class="lang-sh"><code>keal build app.keal -I.keal/deps/kealeb/runtime</code></pre>
+<p>C'est tout. Ajoutez <code>-lsqlite3</code> quand le programme importe <code>src/sql.keal</code>, et rien sinon : kealeb ne se lie à aucune bibliothèque tant que vous ne demandez pas la base de données.</p>
+<h3 id="une-chose-savoir-sur-main">Une chose à savoir sur <code>main</code></h3>
+<p>Keal appelle <code>main</code> tout seul une fois le premier niveau exécuté. Un point d'entrée nommé <code>main</code> ne doit donc <strong>pas</strong> être appelé en plus :</p>
+<pre class="lang-keal"><code>proc main() {
+    site.run(8080)
+}
+                        // pas de `main()` ici — Keal s&#x27;en charge</code></pre>
+<p>Écrire les deux fait tourner tout le programme deux fois. C'est invisible tant que le serveur bloque pour toujours dans sa boucle, et ça apparaît dès que la boucle peut se terminer — ce que l'arrêt propre a rendu possible, et c'est comme ça que ça a été trouvé ici.</p>
+<h2 id="3-les-routes">3. Les routes</h2>
+<p>Cinq verbes et un attrape-tout, chacun prenant un chemin et un gestionnaire :</p>
+<pre class="lang-keal"><code>site.get(&quot;/sante&quot;, { req -&gt; text(&quot;ok&quot;) })
+site.post(&quot;/commandes&quot;, { req -&gt; jsonBody(&quot;{\&quot;id\&quot;:7}&quot;).status(201) })
+site.put(&quot;/commandes/{id}&quot;, { req -&gt; text(&quot;remplacée ${req.param(&quot;id&quot;)}&quot;) })
+site.patch(&quot;/commandes/{id}&quot;, { req -&gt; text(&quot;modifiée&quot;) })
+site.delete(&quot;/commandes/{id}&quot;, { req -&gt; noContent() })
+site.any(&quot;/ping&quot;, { req -&gt; text(&quot;pong&quot;) })</code></pre>
+<p>Un gestionnaire est un <code>(Request) -&gt; Response</code>. C'est un type de fonction ordinaire, donc ce peut être une fonction nommée, une lambda, ou une valeur qu'on se passe :</p>
+<pre class="lang-keal"><code>func sante(req: Request): Response { return text(&quot;ok&quot;) }
+
+site.get(&quot;/sante&quot;, sante)
+site.get(&quot;/santez&quot;, sante)</code></pre>
+<p>Une fonction nommée utilisée comme valeur demande Keal en <code>4b21fc5</code> ou plus récent. Avant cela, le backend natif émettait le pointeur de fonction nu là où une fermeture était attendue, et le programme mourait — trouvé ici, corrigé en amont le jour même.</p>
+<h3 id="ce-qu-un-motif-peut-dire">Ce qu'un motif peut dire</h3>
+<div class="tablewrap"><table><thead><tr><th>motif</th><th>correspond à</th><th><code>req.param(...)</code></th></tr></thead><tbody><tr><td><code>/user/new</code></td><td>exactement cela</td><td>—</td></tr><tr><td><code>/user/{id}</code></td><td><code>/user/42</code></td><td><code>id</code> vaut <code>42</code></td></tr><tr><td><code>/files/{reste...}</code></td><td><code>/files/a/b.css</code></td><td><code>reste</code> vaut <code>a/b.css</code></td></tr></tbody></table></div>
+<p>Un <code>{nom...}</code> final attrape tout ce qui reste, barres obliques comprises, et ne peut être que le dernier. Les segments arrivent décodés : <code>/user/le%20monde</code> donne <code>req.param("id") == "le monde"</code>.</p>
+<p><strong>Quand deux motifs correspondent, celui qui a le plus de segments littéraux gagne.</strong> <code>/user/new</code> l'emporte sur <code>/user/{id}</code>, quel que soit l'ordre de déclaration. C'est la seule règle de priorité, et elle ne dépend pas de l'ordre où vous les avez écrites.</p>
+<p>Un chemin qui ne correspond à rien est un 404. Un chemin qui correspond sous un autre verbe est un <strong>405</strong> portant <code>Allow:</code> — la différence compte pour tous les clients, et un cadriciel incapable de la faire les oblige tous à deviner.</p>
+<h2 id="4-la-requ-te">4. La requête</h2>
+<pre class="lang-keal"><code>site.post(&quot;/recherche&quot;, { req -&gt;
+    val q = req.queryOr(&quot;q&quot;, &quot;&quot;)                 // ?q=…
+    val page = req.queryOr(&quot;page&quot;, &quot;1&quot;).toInt() ?: 1
+    val qui = req.headerOr(&quot;user-agent&quot;, &quot;?&quot;)    // la casse est indifférente
+    val sid = req.cookie(&quot;session&quot;)              // String?
+    val form = req.form()                        // un formulaire posté, décodé
+    val corps = req.text()                       // le corps, en texte
+    text(&quot;${q} ${page} ${qui}&quot;)
+})</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>method</code> <code>path</code> <code>target</code> <code>version</code> <code>peer</code></td><td>tels qu'arrivés ; <code>path</code> est décodé, <code>target</code> non</td></tr><tr><td><code>param(nom)</code></td><td>ce que la route a capturé — <code>""</code> si la route n'a pas ce trou</td></tr><tr><td><code>query</code> · <code>queryOr(nom, défaut)</code></td><td>la chaîne de requête, analysée</td></tr><tr><td><code>header(nom): String?</code> · <code>headerOr</code> · <code>hasHeader</code></td><td>la casse est repliée ; un en-tête envoyé deux fois arrive joint par <code>, </code></td></tr><tr><td><code>cookies(): Map</code> · <code>cookie(nom): String?</code></td><td></td></tr><tr><td><code>text()</code> · <code>form()</code> · <code>formAll()</code> · <code>body</code></td><td>le corps en texte, en formulaire, en gardant les répétitions, en octets</td></tr><tr><td><code>contentType()</code></td><td>le type de média, sans ses paramètres</td></tr><tr><td><code>keepAlive()</code> · <code>isUpgrade()</code></td><td>ce à quoi sert la connexion</td></tr></tbody></table></div>
+<p>Une <code>Request</code> ne se modifie pas. Keal dit que le contenu d'un paramètre appartient à l'appelant sauf si la signature dit <code>var</code>, et un type de fonction ne peut pas dire <code>var</code> — donc un gestionnaire reçoit la réponse plutôt que l'occasion de changer la question. Là où le cadriciel doit ajouter quelque chose, il en construit une nouvelle : c'est ce que fait <code>withParams</code>, et elle partage le corps au lieu de le copier.</p>
+<h2 id="5-la-r-ponse">5. La réponse</h2>
+<pre class="lang-keal"><code>html(&quot;&lt;p&gt;salut&lt;/p&gt;&quot;)                     // text/html; charset=utf-8
+text(&quot;brut&quot;)                             // text/plain; charset=utf-8
+jsonBody(&quot;{\&quot;ok\&quot;:true}&quot;)                // application/json
+bytes(&quot;image/png&quot;, unBuf)                // n&#x27;importe quoi, depuis des octets
+noContent()                              // 204
+redirect(&quot;/suite&quot;)                       // 302 ; redirect(&quot;/x&quot;, 301) si permanent
+notFound(&quot;commande inconnue&quot;)            // 404
+badRequest(&quot;id doit être un nombre&quot;)     // 400
+serverError()                            // 500</code></pre>
+<p>Chacune répond une <code>Response</code>, et chaque réglage répond de nouveau la réponse, si bien qu'une ligne se lit d'un bloc :</p>
+<pre class="lang-keal"><code>html(page).status(201).type(&quot;text/html&quot;).with(&quot;x-made-by&quot;, &quot;kealeb&quot;).cookie(&quot;sid&quot;, jeton, 3600)</code></pre>
+<p>Gardez une chaîne d'appels <strong>sur une seule ligne</strong>. Keal termine une instruction au saut de ligne quand le jeton précédent pouvait en terminer une, donc un <code>.</code> en début de ligne suivante est une nouvelle instruction, pas une continuation.</p>
+<p><code>cookie(nom, valeur, maxAge, path, httpOnly, sameSite)</code> vaut par défaut <code>HttpOnly</code>, <code>SameSite=Lax</code>, chemin <code>/</code>, et aucun <code>Max-Age</code> — ce qui veut dire <em>cette session de navigateur</em>. <code>maxAge = 0</code> supprime.</p>
+<p><code>Content-Length</code> est toujours écrit d'après le nombre d'octets du corps et ne peut pas être remplacé. Une longueur en désaccord avec son corps casse la requête <em>suivante</em> plutôt que celle-ci : c'est un bug dont il vaut la peine de refuser la possibilité.</p>
+<h2 id="6-les-pages">6. Les pages</h2>
+<p>Une page est une fonction d'une requête vers un arbre de composants. Le cadriciel l'enveloppe dans un document et l'envoie.</p>
+<pre class="lang-keal"><code>site.page(&quot;/a-propos&quot;, { req -&gt; column([
+    h1(&quot;À propos&quot;),
+    p(&quot;Deux paragraphes et un lien.&quot;),
+    link(&quot;/&quot;, &quot;accueil&quot;)
+])}, &quot;À propos de nous&quot;)</code></pre>
+<p>Le dernier argument est le <code>&lt;title&gt;</code> ; sans lui, c'est le titre de l'application.</p>
+<h3 id="l-arbre">L'arbre</h3>
+<p>Chaque constructeur répond un <code>Node</code>, et chaque réglage le répond de nouveau.</p>
+<pre class="lang-keal"><code>el(&quot;section&quot;).cls(&quot;hero&quot;).id(&quot;haut&quot;).attr(&quot;role&quot;, &quot;banner&quot;).add(h1(&quot;Titre&quot;))</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>el(balise)</code> · <code>elt(balise, enfants)</code></td><td>n'importe quel élément</td></tr><tr><td><code>txt(s)</code></td><td>du texte — <strong>toujours échappé</strong></td></tr><tr><td><code>raw(s)</code></td><td>du balisage déjà balisé, et qui doit être exactement un élément</td></tr><tr><td><code>nothing()</code></td><td>un nœud qui occupe une place et ne montre rien</td></tr><tr><td><code>div</code> <code>span</code> <code>p</code> <code>h1</code> <code>h2</code> <code>h3</code> <code>strong</code> <code>em</code> <code>code</code> <code>pre</code> <code>br</code> <code>hr</code></td><td></td></tr><tr><td><code>link(href, s)</code> · <code>img(src, alt)</code></td><td></td></tr><tr><td><code>ul</code> <code>ol</code> <code>li</code> · <code>table</code> <code>thead</code> <code>tbody</code> <code>tr</code> <code>th</code> <code>td</code> <code>tdt</code></td><td></td></tr><tr><td><code>section</code> <code>header</code> <code>footer</code> <code>nav</code> <code>main</code></td><td></td></tr><tr><td><code>form</code> <code>label</code> <code>option</code></td><td></td></tr><tr><td><code>.cls(noms)</code> <code>.id(v)</code> <code>.style(v)</code> <code>.title(v)</code> <code>.attr(n, v)</code> <code>.flag(n, oui)</code></td><td></td></tr><tr><td><code>.add(enfant)</code> <code>.addAll(enfants)</code> <code>.on(événement, gestionnaire)</code> <code>.keyed(k)</code></td><td></td></tr></tbody></table></div>
+<p><code>.flag(nom, oui)</code> sert aux attributs booléens : il écrit <code>disabled</code> quand <code>oui</code> et l'omet sinon, parce que <code>disabled="false"</code> désactive quand même.</p>
+<h3 id="les-composants">Les composants</h3>
+<p><code>row</code>, <code>column</code> et <code>card</code> sont de la mise en page ; les autres prennent des gestionnaires et ne signifient quelque chose que sur une page vivante.</p>
+<pre class="lang-keal"><code>row([button(&quot;Enregistrer&quot;, { e -&gt; sauver() }), button(&quot;Annuler&quot;, { e -&gt; retour() })])
+column([field(nom, { e -&gt; nom = e.value }), checkbox(actif, { e -&gt; actif = e.checked() })])
+select(choisi, [(&quot;a&quot;, &quot;Alpha&quot;), (&quot;b&quot;, &quot;Bêta&quot;)], { e -&gt; choisi = e.value })
+textarea(corps, { e -&gt; corps = e.value })
+shownWhen(n &gt; 0, p(&quot;${n} en attente&quot;))</code></pre>
+<p><code>submit(texte)</code> est l'autre espèce : un bouton qui soumet son formulaire de façon ordinaire, pour une page qui fonctionne sans aucun JavaScript.</p>
+<h3 id="des-styles-crits-en-keal">Des styles écrits en Keal</h3>
+<p><code>.style("color: red")</code> prend une chaîne et le fera toujours — pour une déclaration sur un nœud, c'est la chose la plus courte et la plus honnête. Pour une feuille entière, <code>css.keal</code> en construit une à partir de valeurs :</p>
+<pre class="lang-keal"><code>val href = site.css(sheet([
+    vars(&quot;:root&quot;, [(&quot;--accent&quot;, &quot;#2f6feb&quot;)]),
+    rule(&quot;.hero&quot;).bg(&quot;var(--accent)&quot;).fg(&quot;white&quot;).pad(&quot;3rem 2rem&quot;).radius(&quot;12px&quot;),
+    rule(&quot;.hero h1&quot;).size(&quot;2.4rem&quot;).weight(&quot;700&quot;),
+    media(&quot;(max-width: 600px)&quot;, [rule(&quot;.hero&quot;).pad(&quot;1.5rem&quot;)])
+]))</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>rule(sélecteur)</code></td><td>une règle ; chaque réglage la répond, donc on chaîne ou pas</td></tr><tr><td><code>.set(propriété, valeur)</code></td><td>celui qui marche toujours</td></tr><tr><td><code>.fg</code> <code>.bg</code> <code>.pad</code> <code>.margin</code> <code>.border</code> <code>.radius</code> <code>.font</code> <code>.size</code> <code>.weight</code> <code>.width</code> <code>.height</code> <code>.gap</code> <code>.display</code> <code>.flex</code> <code>.grid</code> <code>.shadow</code> <code>.opacity</code> <code>.cursor</code> <code>.position</code> <code>.overflow</code> <code>.transition</code></td><td>ceux qui méritent un nom</td></tr><tr><td><code>media(requête, règles)</code> · <code>supports(requête, règles)</code></td><td>les at-rules ; la requête est le sélecteur</td></tr><tr><td><code>vars(sélecteur, paires)</code></td><td>les propriétés personnalisées, en une règle</td></tr><tr><td><code>sheet(règles)</code></td><td>le tout, en texte</td></tr></tbody></table></div>
+<p>Ce n'est pas un analyseur CSS et rien n'est validé : ce que vous écrivez sort. Ce que ça achète, c'est qu'<strong>une règle est une valeur</strong> — tenue dans une liste, rendue par une fonction, construite par une boucle — et que les sélecteurs et les nombres viennent du même endroit que le reste du programme.</p>
+<p><code>site.css(texte)</code> la sert et la lie depuis chaque page. L'URL nomme le contenu — <code>/kealeb/asset-2b7c19f4e1.css</code> — donc elle part avec un cache d'un an <code>immutable</code> et change à l'instant où la feuille change. Elle répond cette URL, pour une page qui voudrait la référencer elle-même.</p>
+<h3 id="le-javascript-et-quand-il-en-faut">Le JavaScript, et quand il en faut</h3>
+<pre class="lang-keal"><code>site.script(&quot;/* une carte, un graphique, une balise de mesure */&quot;)
+site.linkStyle(&quot;https://fonts.example/chose.css&quot;)
+site.inHead(&quot;&lt;link rel=\&quot;icon\&quot; href=\&quot;/favicon.svg\&quot;&gt;&quot;)</code></pre>
+<p><code>script</code> est servi et mis en cache de la même façon, avec <code>defer</code>. Tout l'intérêt du cadriciel est que vous n'en ayez pas besoin — les événements et le rendu sont du Keal, sur le serveur. C'est là pour ce qui appartient vraiment au navigateur. Si vous vous surprenez à y écrire de la logique applicative, le cadriciel a échoué sur quelque chose et il vaut la peine de dire sur quoi.</p>
+<p><strong>L'ordre n'a pas d'importance.</strong> Le titre, la feuille de style et les ressources sont figés à la construction du serveur, donc après tous les enregistrements : une page déclarée avant <code>site.css(...)</code> reçoit quand même la feuille. C'était un vrai défaut, et cette phrase dit qu'il n'en est plus un.</p>
+<h3 id="l-chappement">L'échappement</h3>
+<p><code>txt</code> échappe. Il n'y a pas de drapeau pour l'en empêcher — <code>raw</code> est une autre fonction, avec un autre nom, et c'est toute l'histoire de la sécurité ici. Les valeurs d'attribut sont en plus échappées pour les guillemets.</p>
+<h3 id="la-feuille-de-style">La feuille de style</h3>
+<p>Chaque page charge <code>/kealeb/kealeb.css</code> : une centaine de lignes, chaque règle préfixée <code>kb-</code>, suivant le mode sombre du système. Pour mettre la vôtre :</p>
+<pre class="lang-keal"><code>site.style = &quot;/static/app.css&quot;     // la vôtre à la place
+site.style = &quot;&quot;                    // aucune
+site.head = &quot;&lt;link rel=\&quot;icon\&quot; href=\&quot;/favicon.svg\&quot;&gt;&quot;</code></pre>
+<h2 id="7-les-formulaires-sans-javascript">7. Les formulaires sans JavaScript</h2>
+<pre class="lang-keal"><code>site.page(&quot;/saluer&quot;, { req -&gt; column([
+    h1(&quot;Saluer&quot;),
+    el(&quot;form&quot;).attr(&quot;method&quot;, &quot;post&quot;).add(row([
+        el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;name&quot;, &quot;nom&quot;),
+        submit(&quot;Dire bonjour&quot;)
+    ]))
+])})
+
+site.post(&quot;/saluer&quot;, { req -&gt;
+    val nom = req.form().get(&quot;nom&quot;) ?: &quot;&quot;
+    html(doc(&quot;Saluer&quot;, h1(&quot;Bonjour, ${nom}&quot;)))
+})</code></pre>
+<p>Rien ici n'a besoin de socket, de session ni de script. C'est toute la troisième route de <a href="examples.html#hello"><code>examples/hello.keal</code></a>.</p>
+<h3 id="les-fichiers">Les fichiers</h3>
+<p>Un formulaire qui porte un fichier poste du <code>multipart/form-data</code>, ce sont des octets et non du texte — un PNG passé dans un validateur UTF-8 est un PNG corrompu. C'est donc analysé sur les octets, et une <code>Part</code> vous rend l'un ou l'autre.</p>
+<pre class="lang-keal"><code>site.post(&quot;/upload&quot;, { req -&gt;
+    val doc = req.file(&quot;doc&quot;)
+    if (doc == null) {
+        badRequest(&quot;choisissez un fichier&quot;)
+    } else {
+        doc.saveTo(&quot;uploads/${epochS()}-${doc.safeName()}&quot;)
+        redirect(&quot;/&quot;, 303)
+    }
+})</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>req.isMultipart()</code></td><td>est-ce ce genre de corps ?</td></tr><tr><td><code>req.parts()</code></td><td>toutes les parties, dans l'ordre</td></tr><tr><td><code>req.part(nom)</code></td><td>une partie, ou null</td></tr><tr><td><code>req.file(nom)</code></td><td>une partie, mais <strong>seulement</strong> si un fichier a vraiment été choisi</td></tr><tr><td><code>p.name</code> <code>p.filename</code> <code>p.kind</code></td><td>le nom du champ, le nom du fichier côté client, le type prétendu</td></tr><tr><td><code>p.text()</code> <code>p.bytes()</code> <code>p.size()</code> <code>p.isFile()</code></td><td></td></tr><tr><td><code>p.saveTo(chemin)</code> · <code>p.safeName(défaut)</code></td><td></td></tr></tbody></table></div>
+<p>Trois choses à savoir avant d'écrire le gestionnaire :</p>
+<ul><li><strong><code>file</code> et <code>part</code> ne posent pas la même question.</strong> Un navigateur envoie une partie pour un champ fichier même quand personne n'a choisi de fichier — nom vide, contenu vide. <code>part</code> vous la donne ; <code>file</code> répond <code>null</code>, ce qui est la vérification que tout gestionnaire d'envoi oublierait sinon.</li><li><strong><code>kind</code> est une affirmation.</strong> Le client dit ce qu'il veut. Un serveur qui le croit est un serveur qui sert un script comme une image.</li><li><strong><code>filename</code> n'est jamais un chemin.</strong> C'est ce qu'un inconnu a tapé, <code>../../etc/</code> compris. <code>saveTo</code> prend un chemin que <em>vous</em> avez choisi, et il n'y a délibérément pas de <code>save(dansCeRépertoire)</code> : cette fonction devrait décider quoi faire du nom du client, et chaque mauvaise réponse est un répertoire dont quelqu'un est sorti. <code>safeName()</code> le réduit aux lettres, chiffres et <code>. - _</code>, et cela reste un nom choisi par un inconnu : servez-vous en pour montrer à quelqu'un ce qu'il a envoyé, et générez le nom que vous rangez.</li></ul>
+<p>Tout le corps est en mémoire, borné par le <code>maxBody</code> du serveur (8 Mo par défaut). Pas d'écriture au fil de l'eau, pas de <code>multipart/mixed</code>, et pas de <code>Content-Transfer-Encoding</code> autre que l'identité — un navigateur qui poste un formulaire n'envoie rien de tout cela.</p>
+<h2 id="8-les-pages-vivantes">8. Les pages vivantes</h2>
+<pre class="lang-keal"><code>site.livePage(&quot;/&quot;, { req -&gt;
+    var compte = 0
+    view({ -&gt; column([
+        h1(&quot;Cliqué ${compte} fois&quot;),
+        button(&quot;Cliquez-moi&quot;, { e -&gt; compte = compte + 1 })
+    ]) })
+})</code></pre>
+<p>Deux fonctions, et la différence entre les deux est tout le modèle :</p>
+<ul><li><strong>L'extérieure s'exécute une fois par visiteur.</strong> Ce qu'elle capture est l'état de ce visiteur-là. Il n'y a pas de table de sessions à indexer correctement — la fermeture <em>est</em> la session.</li><li><strong>L'intérieure s'exécute après chaque événement.</strong> Elle doit être une fonction de l'état et de rien d'autre : ce qu'elle lit et qui peut changer sans événement ne sera pas remarqué avant le suivant.</li></ul>
+<h3 id="ce-qui-se-passe">Ce qui se passe</h3>
+<ol><li>Le navigateur demande la page. Le serveur construit l'arbre, numérote les nœuds qui écoutent, envoie le HTML, et garde l'arbre.</li><li>Un petit script ouvre un WebSocket vers <code>/kealeb/live</code>.</li><li>Vous cliquez. Le script envoie <code>{"i":"0.2.1","e":"click","v":"","f":{}}</code> — quel nœud, quel événement, ce qu'il contenait.</li><li>Le serveur exécute le gestionnaire, reconstruit l'arbre, le compare à celui qu'il avait gardé, et envoie la différence.</li><li>Le script l'applique. Six opérations existent et il n'y en a pas de septième : changer le texte d'un nœud texte, poser un attribut, retirer un attribut, remplacer un nœud, insérer un enfant, retirer un enfant.</li></ol>
+<p>Un gestionnaire est un <code>(Ev) -&gt; Unit</code> :</p>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>e.name</code></td><td><code>click</code>, <code>input</code>, <code>change</code>, <code>submit</code>, <code>keydown</code></td></tr><tr><td><code>e.value</code></td><td>ce que l'élément contenait — le texte du champ, <code>"true"</code>/<code>"false"</code> pour une case, l'option choisie</td></tr><tr><td><code>e.number(défaut)</code> · <code>e.checked()</code></td><td>la valeur, lue</td></tr><tr><td><code>e.field(nom)</code></td><td>un champ du formulaire sur <code>submit</code>, la touche sur <code>keydown</code></td></tr></tbody></table></div>
+<h3 id="la-r-gle-unique">La règle unique</h3>
+<p><strong>Un <code>Node</code>, un nœud dans le navigateur.</strong> L'identité d'un nœud est sa position — <code>0.2.1</code>, comptée depuis le point de montage — donc tout ce qui ne rendrait aucun octet décalerait tout ce qui suit. C'est pour cela que <code>nothing()</code> existe et rend un commentaire vide, et pour cela que <code>raw</code> doit contenir exactement un élément.</p>
+<h3 id="l-identit-et-quand-dire-ce-qu-un-n-ud-est">L'identité, et quand dire ce qu'un nœud est</h3>
+<p>Sans clé, <strong>l'identité est la position</strong>. Le nœud en <code>0.2.1</code> est comparé à ce qui était en <code>0.2.1</code> la fois d'avant, et si les balises correspondent, le nœud du navigateur est conservé et ses attributs ajustés. C'est juste quand c'est la même chose rendue de nouveau — le cas ordinaire, soixante fois sur soixante.</p>
+<p>C'est faux quand deux choses <em>différentes</em> atterrissent au même endroit : une liste décalée d'un cran, un onglet qui a changé, une ligne supprimée. Le nœud est conservé, et avec lui tout ce que le serveur ignore de lui — le caret, le focus, la position de défilement, une frappe pas encore signalée. Tout cela appartient maintenant à autre chose.</p>
+<p><code>.keyed(id)</code> est la façon pour une page de dire <em>ceci est une autre chose</em> :</p>
+<pre class="lang-keal"><code>for (tache in taches) {
+    lignes.add(row([...]).keyed(&quot;tache-${tache.id}&quot;))
+}</code></pre>
+<p>Un nœud dont la clé a changé est reconstruit plutôt que rapiécé, si bien que cet état part avec lui. Les clés sont comparées sur le serveur et n'atteignent jamais le navigateur.</p>
+<p>Ce que les clés ne font <strong>pas</strong> encore, c'est rendre un déplacement bon marché : insérer en tête d'une liste réécrit toujours tout ce qui suit, parce que le diff parcourt les enfants par indice et ne cherche pas celui qui a bougé. Correct, et plus de travail qu'il n'en faut. C'est la prochaine chose à corriger.</p>
+<h3 id="les-sessions">Les sessions</h3>
+<p>Une session vit aussi longtemps que son socket, plus <code>ttlMs</code> (une minute par défaut) pour l'onglet qui s'est endormi. Une page dont le serveur a oublié la session se recharge elle-même et en obtient une nouvelle.</p>
+<pre class="lang-keal"><code>site.live.ttlMs = 300000        // cinq minutes
+site.live.size()                // combien de pages sont ouvertes
+site.live.refreshAll()          // reconstruire toutes les pages ouvertes</code></pre>
+<p><code>refreshAll</code> est ce qu'on appelle quand le monde a changé sous toutes à la fois — une ligne insérée par autre chose, une tâche terminée.</p>
+<h3 id="ce-que-cela-co-te">Ce que cela coûte</h3>
+<p>Le serveur garde une session par page ouverte. Une page ouverte est de la mémoire utilisée. C'est le marché de Vaadin et c'est celui que kealeb passe ; si une page doit tenir cent mille onglets inactifs, ce doit être une <code>page</code> et non une <code>livePage</code>.</p>
+<h2 id="9-les-fichiers-statiques">9. Les fichiers statiques</h2>
+<pre class="lang-keal"><code>site.files(&quot;/static&quot;, &quot;./public&quot;)      // /static/a/b.css -&gt; ./public/a/b.css
+site.file(&quot;/favicon.svg&quot;, &quot;./public/favicon.svg&quot;)</code></pre>
+<p>Chaque réponse porte un <code>ETag</code> fait de la date et de la taille du fichier, et un client qui le renvoie obtient un 304 sans corps.</p>
+<p>Tout chemin comportant un segment <code>..</code>, une barre initiale, une barre inverse ou un composant caché est un <strong>403</strong> — refusé, pas normalisé. Normaliser un chemin hostile, c'est ainsi qu'on sort d'un répertoire.</p>
+<h3 id="les-corps-plus-gros-que-la-m-moire">Les corps plus gros que la mémoire</h3>
+<p>Un corps de requête de plus d'un mégaoctet est écrit dans un fichier au fur et à mesure plutôt que tenu :</p>
+<pre class="lang-keal"><code>s.spoolFrom = 4 * 1024 * 1024      // où passe la ligne
+s.spoolDir = &quot;/var/tmp&quot;            // où vont les fichiers
+s.maxBody = 512 * 1024 * 1024      // coûte maintenant du disque, pas de la mémoire</code></pre>
+<p>Un gestionnaire sait lequel des deux il a reçu :</p>
+<pre class="lang-keal"><code>site.post(&quot;/upload&quot;, { req -&gt;
+    if (req.spooled()) {
+        req.saveBodyTo(&quot;uploads/${epochS()}.bin&quot;)
+        redirect(&quot;/&quot;, 303)
+    } else {
+        ranger(req.body)
+        redirect(&quot;/&quot;, 303)
+    }
+})</code></pre>
+<p><code>text()</code>, <code>form()</code> et <code>parts()</code> lisent le corps en mémoire, donc un corps déversé n'a rien à leur donner : il est à <code>bodyPath</code>, et il appartient au gestionnaire de le déplacer, le copier ou le lire par morceaux. <strong>Le fichier est supprimé quand la requête est finie</strong>, donc un gestionnaire qui veut le garder doit le dire avant de revenir — c'est ce qu'est <code>saveBodyTo</code>.</p>
+<p>Mesuré, en postant soixante mégaoctets : <strong>2,5 Mo résidents</strong>. C'était 133 Mo quand la vidange se faisait après la boucle de lecture plutôt que dedans — le noyau donne tout ce qu'il a, donc un corps arrive plus vite qu'un tour de boucle et le tampon de lecture grossissait pour tout tenir. Ce cadriciel a eu ce défaut pendant une dizaine de minutes, et le chiffre est ici parce que « au fil de l'eau » est un mot et 130 Mo n'en est pas un.</p>
+<p>Ce que cela ne fait pas : un corps <strong>multipart</strong> au-delà du seuil est déversé en entier, et <code>parts()</code> ne sait pas le lire. Un formulaire avec un gros fichier dedans veut donc un <code>spoolFrom</code> au-dessus du plus gros formulaire que vous acceptez, ou un gestionnaire qui analyse le fichier lui-même. Analyser du multipart depuis un fichier est la pièce qui manque, et elle est nommée ici plutôt que découverte.</p>
+<h3 id="les-fichiers-plus-gros-que-la-machine">Les fichiers plus gros que la machine</h3>
+<p>Un fichier de moins d'un mégaoctet est lu en mémoire ; au-delà, le serveur l'ouvre et l'envoie au fur et à mesure que la socket le prend, par quarts de mégaoctet.</p>
+<pre class="lang-keal"><code>streamFrom = 4 * 1024 * 1024        // où passe la ligne</code></pre>
+<p>La ligne est l'endroit où deux choses échangent leur place. Un petit fichier veut être en mémoire : il peut être compressé, ce qui vaut quatre ou cinq fois sa taille sur une feuille de style, et le tenir ne coûte rien. Un gros veut l'inverse — compresser un film ne sert à rien puisqu'un film est déjà compressé, et le tenir est la différence entre le servir et refuser.</p>
+<p>Mesuré, en servant le même fichier de cent mégaoctets des deux façons :</p>
+<div class="tablewrap"><table><thead><tr><th></th><th>mémoire résidente</th></tr></thead><tbody><tr><td>au fil de l'eau</td><td><strong>3 Mo</strong></td></tr><tr><td>lu en entier</td><td><strong>235 Mo</strong></td></tr></tbody></table></div>
+<p>C'est l'appétit de la socket qui cadence la lecture, donc un client lent est une lecture lente et non une file d'attente : le serveur ne tient jamais plus du fichier que le morceau qu'il est en train d'écrire. Un corps envoyé au fil de l'eau n'est jamais compressé, et les deux chemins répondent à <code>Range</code>.</p>
+<h3 id="les-intervalles-d-octets">Les intervalles d'octets</h3>
+<p>Un fichier statique est servi avec <code>Accept-Ranges: bytes</code>, et un client qui en demande une partie l'obtient :</p>
+<pre><code>Range: bytes=0-499        les cinq cents premiers
+Range: bytes=500-         tout à partir de là
+Range: bytes=-500         les cinq cents **derniers**</code></pre>
+<p>La réponse est un 206 avec <code>Content-Range</code>. Un intervalle qui nomme des octets que le fichier n'a pas est un <strong>416</strong> portant <code>Content-Range: bytes */taille</code> — la ressource est là, la tranche non, et ce n'est pas la même chose qu'un 404.</p>
+<p>Tout ce qui ne peut pas être honoré — une unité qui n'est pas <code>bytes</code>, plus d'un intervalle, quoi que ce soit de malformé — veut dire <em>envoyer le tout</em>, ce qui est toujours une réponse correcte à une demande d'intervalle et ce que la spécification autorise un serveur à faire plutôt que de travailler plus.</p>
+<p>Un 206 n'est jamais compressé : un intervalle nomme des octets de la ressource telle qu'elle est, donc une tranche compressée serait une tranche de quelque chose que le client n'a pas demandé.</p>
+<p>La limite honnête : le fichier est lu en entier avant que la tranche soit découpée. C'est très bien pour les tailles dont une page est faite et faux pour un film, et c'est la même limite que partout ailleurs ici — rien ne circule encore au fil de l'eau.</p>
+<h2 id="10-json">10. JSON</h2>
+<pre class="lang-keal"><code>val champs: Map&lt;String, Json&gt; = {}
+champs.set(&quot;id&quot;, jInt(7))
+champs.set(&quot;nom&quot;, jStr(&quot;Ada&quot;))
+champs.set(&quot;etiquettes&quot;, jStrs([&quot;a&quot;, &quot;b&quot;]))
+jsonBody(jObj(champs).write())</code></pre>
+<p>À la lecture :</p>
+<pre class="lang-keal"><code>site.post(&quot;/commandes&quot;, { req -&gt;
+    val corps = parseJson(req.text())
+    if (corps == null) { badRequest(&quot;ce n&#x27;est pas du JSON&quot;) } else {
+        text(&quot;id ${corps.intAt(&quot;id&quot;)} pour ${corps.str(&quot;nom&quot;)}&quot;)
+    }
+})</code></pre>
+<p><code>parseJson</code> répond un <code>Json?</code>. Du texte en trop est un refus, pas quelque chose à ignorer. <code>field(nom)</code> répond un <code>Json?</code>, ce qui n'est pas la même chose qu'un champ dont la valeur est <code>null</code> en JSON — et c'est pour cette différence qu'il est nullable.</p>
+<h2 id="11-les-tests">11. Les tests</h2>
+<p>Un gestionnaire est une fonction, donc l'essentiel d'un site se teste sans aucun socket :</p>
+<pre class="lang-keal"><code>val r = Router()
+r.get(&quot;/user/{id}&quot;, { req -&gt; text(&quot;user ${req.param(&quot;id&quot;)}&quot;) })
+
+assert(dispatch(r, request(&quot;GET&quot;, &quot;/user/42&quot;)).text() == &quot;user 42&quot;, &quot;le paramètre&quot;)
+assert(dispatch(r, request(&quot;GET&quot;, &quot;/rien&quot;)).code == 404, &quot;et rien d&#x27;autre&quot;)</code></pre>
+<p><code>request(méthode, cible)</code> en construit une à la main. <code>dispatch(router, req)</code> la passe dans la table.</p>
+<p>Quand on veut vraiment le socket, on demande le port 0 et la machine en choisit un :</p>
+<pre class="lang-keal"><code>val s = site.serverOn(0)
+val port = s.open()          // le port réellement obtenu
+s.tick(50)                   // un tour de boucle</code></pre>
+<p><code>tools/test.sh</code> lance <a href="https://github.com/geneacta/kealeb/blob/main/tests/units.keal"><code>tests/units.keal</code></a> et, si <code>node</code> est présent, <a href="https://github.com/geneacta/kealeb/blob/main/tests/client.mjs"><code>tests/client.mjs</code></a> — qui exécute le vrai script client contre un vrai serveur.</p>
+<h3 id="tester-ce-qu-un-programme-laisse-derri-re-lui">Tester ce qu'un programme laisse derrière lui</h3>
+<p>Keal libère un objet quand sa dernière référence disparaît, donc une fuite ici est un <strong>cycle</strong> et rien d'autre. <code>keal build --audit</code> dit ce qui a survécu au programme et lequel n'était plus joignable :</p>
+<pre class="lang-sh"><code>keal build --audit tests/lifetime.keal &amp;&amp; ./lifetime</code></pre>
+<p>Le piège est que le verdict arrive <em>après</em> la dernière instruction : le programme ne peut donc pas l'affirmer lui-même — quand la réponse existe, il n'y a plus de programme pour en faire quelque chose. Il faut que quelque chose d'extérieur lise la sortie ; <code>tools/test.sh</code> le fait, et échoue avec le rapport entier quand la réponse n'est pas <code>nothing outlived the program</code>. Une version de ce test finissant par <code>assert(true, "aucune fuite")</code> ressemble à un test, passe au vert pour toujours, et ne vérifie rien.</p>
+<p>Ce test affirme un négatif, il a donc un témoin : <a href="https://github.com/geneacta/kealeb/blob/main/tests/leaks.keal"><code>tests/leaks.keal</code></a> construit le cycle exprès, et le lanceur exige que l'audit le voie encore, et qu'il en voie exactement un. Une suite qui ne vérifie jamais que l'absence d'une chose passe au vert le jour où elle cesse de savoir la trouver.</p>
+<p>La règle tient en une ligne et ne parle ni de gestionnaires ni de kealeb : <strong>une fermeture rangée dans un objet ne doit pas tenir cet objet.</strong> Le comptage de références libère ce que plus rien ne désigne, et une boucle se désigne elle-même.</p>
+<p>Dans ce cadriciel la boucle passe par le routeur — il tient le gestionnaire, et l'application le tient — donc la forme à éviter est un gestionnaire qui revient à l'application :</p>
+<pre class="lang-keal"><code>val site = app(&quot;le mien&quot;)
+
+site.get(&quot;/a&quot;, { req -&gt; text(site.title) })       // tient l&#x27;application
+val nom = site.title
+site.get(&quot;/b&quot;, { req -&gt; text(nom) })              // tient une chaîne</code></pre>
+<p>Dans une méthode de votre propre classe, c'est la même chose épelée <code>this</code>. Dans les deux cas le remède est le même : lire ce dont la fermeture a besoin dans un local <em>avant</em> la lambda, et la fermeture tient la valeur au lieu de l'objet qui l'avait.</p>
+<p>Dans un programme ordinaire cela ne coûte rien, et il vaut mieux le dire franchement que crier au loup : <code>val site = app(...)</code> au premier niveau vit jusqu'à la fin du processus, donc une boucle à l'intérieur n'est jamais ramassée parce que rien n'allait jamais la ramasser. Cela compte quand une application est construite puis lâchée — un test, ou un programme qui en sert plusieurs. C'est précisément ce que fait <code>tests/lifetime.keal</code>, et pourquoi ses gestionnaires ne mentionnent jamais <code>site</code>.</p>
+<p><code>weak</code> n'est pas la réponse ici : ce serait dire que l'application n'est que faiblement tenue par ses propres routes, ce que le programme ne veut pas dire.</p>
+<h2 id="12-les-filtres">12. Les filtres</h2>
+<p>Un filtre enveloppe chaque requête. C'est une fonction ordinaire : pas de registre, pas d'annotation d'ordre, pas de configuration de chaîne — l'ordre est celui dans lequel vous les avez écrits.</p>
+<pre class="lang-keal"><code>site.use({ req, next -&gt;
+    val debut = monoMs()
+    val res = next.on(req)
+    println(&quot;${req.method} ${req.path} ${res.code} ${monoMs() - debut}ms&quot;)
+    res
+})</code></pre>
+<p>Ils s'exécutent <strong>du plus extérieur au plus intérieur</strong> et se déroulent dans l'autre sens, donc le premier ajouté est le dernier à voir la réponse. Un filtre qui n'appelle jamais <code>next.on(req)</code> a répondu lui-même, et c'est à quoi ressemble un refus :</p>
+<pre class="lang-keal"><code>site.use({ req, next -&gt;
+    if (req.path.startsWith(&quot;/admin&quot;) and (not a.signedIn(req))) {
+        redirect(&quot;/sign-in&quot;, 303)
+    } else {
+        next.on(req)
+    }
+})</code></pre>
+<p>Les filtres sont <strong>à l'intérieur</strong> de ce qu'installe <code>secure</code> et <strong>à l'extérieur</strong> du routeur : un filtre ne voit jamais une requête qui a raté son contrôle CSRF, et tout ce qu'un filtre répond reçoit quand même les en-têtes.</p>
+<p>Un filtre est tenu par l'application, donc la règle qui vaut partout ailleurs vaut ici : un filtre ne doit pas capturer l'application. Lisez ce dont il a besoin dans un local d'abord.</p>
+<p>Quand une seule fonction suffit, <code>Server.handle</code> est toujours là, et le remplacer remplace tout, routage compris.</p>
+<h2 id="13-la-mise-en-service">13. La mise en service</h2>
+<pre class="lang-keal"><code>site.run(8080)                        // 127.0.0.1 — ne peut surprendre personne
+site.run(8080, &quot;&quot;)                    // toutes les interfaces
+site.log = false                      // pas de ligne par requête</code></pre>
+<p>Le serveur qu'elle construit se règle avant de démarrer :</p>
+<pre class="lang-keal"><code>val s = site.serverOn(8080)
+s.maxHead = 16 * 1024                 // au-delà, c&#x27;est 431
+s.maxBody = 2 * 1024 * 1024           // au-delà, c&#x27;est 413
+s.idleMs = 15000                      // une connexion silencieuse est fermée
+s.maxRequests = 500                   // par connexion, puis on ferme
+s.handle = { req -&gt; monPropreAiguillage(req) }
+s.run()</code></pre>
+<p>Il n'y a pas de TLS. Mettez-le derrière un proxy inverse, qui est la place d'un terminateur ; <code>X-Forwarded-For</code> arrive comme un en-tête ordinaire et <code>req.peer</code> est le proxy.</p>
+<p>La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc un journal redirigé vers un fichier ou un superviseur arrive au fil de l'écriture.</p>
+<h3 id="la-compression">La compression</h3>
+<p>Toute réponse qu'un navigateur peut lire compressée l'est :</p>
+<pre class="lang-keal"><code>s.compress = false        // si vous préférez que non
+s.compressFrom = 2048     // la taille en dessous de laquelle l&#x27;en-tête coûte plus</code></pre>
+<p>C'est actif par défaut et il n'y a pas grand-chose : si le client a dit <code>Accept-Encoding: gzip</code>, si le type de média est du texte ou quelque chose qui en est en dessous, si le corps fait au moins <code>compressFrom</code> octets, et si la compression l'a vraiment rétréci — alors il part compressé. Si l'une de ces conditions manque, il part tel quel.</p>
+<p><code>Vary: Accept-Encoding</code> est posé <strong>que la réponse ait été compressée ou non</strong>, et c'est la partie que tout le monde oublie : un cache qui aurait rangé la réponse compressée sans lui la donnerait au client suivant, qui ne sait peut-être pas la lire.</p>
+<p>Mesuré sur cette machine : une page de 9 Ko devient 717 octets en une milliseconde environ ; 180 Ko en prennent quatre. Ce qui est déjà compressé — un PNG, une police — n'est jamais touché : son type n'est pas dans la courte liste de ce qui vaut la peine, et DEFLATE dépenserait ces millisecondes à le grossir très légèrement.</p>
+<p>Le compresseur est <code>src/gzip.keal</code>, écrit en Keal. Chaque bloc part avec celle des deux tables qui est la plus petite — celle que la spécification écrit en dur, ou une construite à partir de ce que ce bloc contient vraiment et écrite dans la sortie devant lui. Choisir coûte une boucle sur les fréquences et vaut environ un cinquième sur du HTML ; un bloc dont l'alphabet est presque uniforme — un fragment d'image, un blob base64 — sort plus petit avec la table fixe, et c'est pour ça qu'on demande au lieu de supposer.</p>
+<p>Mesuré contre l'implémentation de référence sur les huit fichiers que la suite compresse, <code>gzip -6</code> et celui-ci donnent <strong>la même taille sur six d'entre eux, un octet de moins sur deux, et huit octets de plus sur un</strong> — un fichier de 13 Ko, soit trois pour mille. Il n'y a pas de raison d'aller chercher autre chose.</p>
+<p>Il n'y a pas de décompresseur. kealeb compresse et ne décompresse jamais, et c'est aussi pourquoi rien en Keal ne peut vérifier la sortie : <code>tools/test.sh</code> donne chaque fichier produit au <code>gzip</code> du système <strong>et</strong> à Python, et exige que les deux rendent les octets. Un test qui vérifierait seulement que la sortie est plus petite passerait au vert le jour où le compresseur se mettrait à produire un charabia plausible.</p>
+<h3 id="l-arr-t">L'arrêt</h3>
+<p><code>SIGINT</code> et <code>SIGTERM</code> — Ctrl-C, et ce qu'envoie un gestionnaire de services — ne tuent plus le processus. Ils lui demandent de s'arrêter, et il le fait dans cet ordre :</p>
+<ol><li><code>onStop</code> s'exécute, si vous en avez posé un.</li><li>L'écouteur se ferme, donc un client qui se connecte maintenant est refusé par le noyau et peut aller ailleurs.</li><li>Les connexions au milieu d'une réponse ont jusqu'à <code>drainMs</code> (cinq secondes) pour finir. Celles qui ne doivent rien sont fermées tout de suite — attendre un keep-alive inactif reviendrait à attendre le délai entier à chaque fois.</li><li>Ce qui reste ouvert après est fermé quand même, avec une ligne qui le dit. Un arrêt qui attend pour toujours est un processus que quelqu'un doit tuer, et être tué est précisément ce que ceci évite.</li></ol>
+<pre class="lang-keal"><code>val s = site.serverOn(8080)
+s.onStop = { -&gt; println(&quot;au revoir&quot;) }
+s.drainMs = 15000
+s.run()</code></pre>
+<p>Un gestionnaire ne peut pas être interrompu, donc une requête déjà en cours va toujours jusqu'au bout : le signal pose un drapeau et c'est la boucle qui le remarque — ce qui est aussi la seule chose qu'on ait le droit de faire dans un gestionnaire de signal.</p>
+<h3 id="quand-il-n-y-a-rien-et-quand-quelque-chose-a-cass">Quand il n'y a rien, et quand quelque chose a cassé</h3>
+<pre class="lang-keal"><code>site.onNotFound({ req -&gt; column([h1(&quot;Rien à ${req.path}&quot;), link(&quot;/&quot;, &quot;accueil&quot;)]) })
+site.onError({ req -&gt; column([h1(&quot;Quelque chose a mal tourné&quot;), p(&quot;C&#x27;est noté.&quot;)]) })</code></pre>
+<p>Les deux construisent une page comme n'importe quelle autre — le document, la feuille de style, la forme du site — et les deux ne remplacent la réponse que <strong>si le client a demandé du HTML</strong>. Le 404 d'une API reste la phrase courte qu'un programme peut lire, parce qu'une gestion d'erreur qui doit analyser du HTML est une gestion d'erreur que personne n'écrit.</p>
+<p><code>onError</code> ne reçoit pas ce qui a été levé, exprès. Ce qu'un gestionnaire a levé peut contenir une requête, un chemin, un mot de passe — tout ce qu'il tenait au moment d'abandonner — donc cela part sur la sortie standard, où quelqu'un qui peut lire le journal peut le lire, et un journal n'est pas une chose qu'un inconnu peut lire.</p>
+<p>Le <code>try</code> qui transforme une exception en 500 est <strong>à l'intérieur</strong> des filtres, autour du routeur. Ce n'est pas un détail : un gestionnaire qui lève déroule tous les filtres qui l'entourent en sortant, donc un <code>try</code> plus à l'extérieur produirait un 500 qu'aucun filtre ne voit — <code>onError</code> ne pourrait pas le remplacer, et un filtre de journalisation manquerait précisément la requête qu'il fallait noter.</p>
+<h2 id="14-le-travail-programm">14. Le travail programmé</h2>
+<pre class="lang-keal"><code>site.every(60000, { -&gt; viderLesPaniersExpires() })   // chaque minute
+site.after(5000, { -&gt; prechaufferLeCache() })        // une fois, cinq secondes après</code></pre>
+<p>Une tâche s'exécute sur le fil de la boucle, <strong>entre deux requêtes et jamais pendant une</strong>, donc elle lit et écrit ce qu'un gestionnaire lit et écrit sans rien à synchroniser — pas de verrou, pas de file, pas de copie. C'est le même marché que le reste du cadriciel, et il a le même prix : une tâche qui bloque bloque le serveur.</p>
+<p>Une tâche plus longue que son intervalle tourne simplement moins souvent qu'elle ne l'a demandé. Elle n'est jamais lancée deux fois, et il n'y a pas de file d'exécutions manquées prête à se ruer quand elle finit.</p>
+<p>Une tâche qui lève une exception est signalée sur la sortie standard et <strong>garde son rythme</strong> — un traitement qui échoue une fois par heure doit quand même être retenté l'heure suivante, et un serveur qui meurt parce qu'un traitement a échoué est pire que le traitement qui échoue.</p>
+<p>Depuis un serveur qu'on tient déjà, <code>every</code> et <code>after</code> répondent le <code>Timer</code>, qu'on peut annuler (<code>cancel()</code>) ou faire tourner tout de suite (<code>soon()</code>) :</p>
+<pre class="lang-keal"><code>val s = site.serverOn(8080)
+val battement = s.every(30000, { -&gt; ping() })
+battement.soon()                                     // au prochain tour
+battement.cancel()                                   // et plus jamais</code></pre>
+<p>Le coût est une comparaison par tour de boucle et rien d'autre : la boucle dormait déjà dans <code>poll</code> avec une échéance, et un minuteur est cette échéance choisie au lieu d'être supposée. Un serveur sans tâche dort exactement comme avant.</p>
+<p>La règle sur ce qu'une tâche peut capturer est celle des gestionnaires : <strong>une tâche ne doit pas tenir l'application.</strong> <code>site.every(1000, { -&gt; println(site.title) })</code> ferme la boucle que <code>tests/lifetime.keal</code> existe pour garder ouverte.</p>
+<p>Il n'y a ni expression cron ni calendrier. <code>every</code> compte des millisecondes. Une tâche qui doit tourner à 03:00 doit regarder l'horloge elle-même — <code>utcNow()</code> est dans le prélude — parce qu'un ordonnanceur qui comprend les fuseaux et l'heure d'été est un autre programme que celui-ci, et prétendre le contraire est la façon dont un traitement tourne deux fois en octobre.</p>
+<h2 id="15-une-base-de-donn-es">15. Une base de données</h2>
+<p>SQLite, et c'est un <strong>second import et un second drapeau de liaison</strong> — un programme qui n'ouvre jamais de base ne doit pas se lier à une :</p>
+<pre class="lang-keal"><code>import &quot;kealeb/kealeb.keal&quot;
+import &quot;kealeb/src/sql.keal&quot;</code></pre>
+<pre class="lang-sh"><code>tools/build.sh app.keal -lsqlite3</code></pre>
+<pre class="lang-keal"><code>val db = openDb(&quot;notes.db&quot;)          // &quot;:memory:&quot; pour un test
+if (db == null) { println(&quot;impossible à ouvrir&quot;); exit(1) }
+
+db.migrate([
+    &quot;create table note(id integer primary key, body text not null, done integer not null default 0)&quot;,
+    &quot;alter table note add column made integer not null default 0&quot;
+])
+
+db.run(&quot;insert into note(body) values (?)&quot;, [vText(quoi)])
+for (r in db.query(&quot;select id, body, done from note order by id&quot;, [])) {
+    println(&quot;${r.int(&quot;id&quot;)} ${r.text(&quot;body&quot;)} ${r.bool(&quot;done&quot;)}&quot;)
+}</code></pre>
+<h3 id="la-r-gle-unique">La règle unique</h3>
+<p><strong>Tout ce qu'une requête peut atteindre entre comme valeur liée</strong> — un <code>?</code> dans le SQL, un <code>Val</code> dans la liste. Il n'existe ici aucune fonction qui construise du SQL à partir d'une chaîne qu'on vous a envoyée, parce qu'il n'en existe pas de version sûre à proposer.</p>
+<p><code>script()</code> est la seule fonction qui prenne du SQL sans paramètres. Elle est pour le schéma que vous avez écrit, elle enchaîne plusieurs instructions, et elle s'épelle autrement que <code>run</code> exprès. Ne lui donnez jamais rien qu'une requête ait touché.</p>
+<p>Deux autres refus en découlent, et tous deux sont la forme que prend une modification laissée à moitié :</p>
+<ul><li><code>run</code> et <code>query</code> prennent <strong>une</strong> instruction. <code>"select 1; drop table note"</code> est refusé avec ces mots-là, ni exécuté ni tronqué en silence.</li><li>Le nombre de valeurs doit correspondre au nombre de <code>?</code>. Un écart est refusé en nommant les deux comptes, plutôt que de devenir un <code>null</code> dans une colonne trois semaines plus tard.</li></ul>
+<h3 id="la-lecture">La lecture</h3>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>db.run(sql, params)</code></td><td>lignes changées, ou -1</td></tr><tr><td><code>db.query(sql, params)</code></td><td>toutes les lignes, en liste</td></tr><tr><td><code>db.one(sql, params)</code></td><td>la première <code>Row?</code>, ou null</td></tr><tr><td><code>db.value(sql, params)</code></td><td>la première colonne de la première ligne, en <code>Val</code></td></tr><tr><td><code>db.script(sql)</code></td><td>des instructions sans paramètres — votre schéma</td></tr><tr><td><code>db.changed()</code> · <code>db.lastId()</code> · <code>db.error()</code></td><td></td></tr></tbody></table></div>
+<p>Une <code>Row</code> se lit par nom — <code>r.int("id")</code>, <code>r.text("body")</code>, <code>r.float("score")</code>, <code>r.bool("done")</code>, <code>r.isNull("x")</code> — et un nom qu'aucune colonne ne porte répond null plutôt que d'échouer : une requête et son lecteur divergent dans le même commit assez souvent pour qu'un plantage là n'aide personne.</p>
+<p>Les valeurs se convertissent comme SQLite les convertit : demander son texte à un nombre donne ses chiffres. <code>isNull</code> est séparé de tous les défauts, parce qu'<em>absent</em> et <em>zéro</em> ne sont pas la même réponse.</p>
+<p>Construction : <code>vInt</code> <code>vFloat</code> <code>vText</code> <code>vBool</code> <code>vNull</code>. SQLite n'a pas de booléen, donc <code>vBool</code> est un entier qui dit lequel.</p>
+<h3 id="les-transactions">Les transactions</h3>
+<pre class="lang-keal"><code>db.transaction({ -&gt;
+    db.run(&quot;update compte set solde = solde - ? where id = ?&quot;, [vInt(n), vInt(de)])
+    db.run(&quot;update compte set solde = solde + ? where id = ?&quot;, [vInt(n), vInt(vers)])
+    true                                  // false annule
+})</code></pre>
+<p>Elle valide quand le bloc répond <code>true</code>, annule quand il répond <code>false</code>, et annule <strong>puis relance</strong> quand il lève — parce qu'une transaction laissée ouverte par une exception est ce qui verrouille la base pour tout le monde.</p>
+<h3 id="les-migrations">Les migrations</h3>
+<p><code>migrate(étapes)</code> est la liste de toutes les migrations que le programme a jamais eues, dans l'ordre et jamais réordonnée. L'étape 1 est <code>étapes[0]</code> ; une base en version 2 repart de <code>étapes[2]</code>. SQLite garde le numéro dans le fichier, donc il n'y a aucune table à créer et rien à tenir synchronisé.</p>
+<p>Chaque étape tourne <strong>dans une transaction avec son propre changement de version</strong>, donc une étape qui échoue laisse la base exactement où elle était. Elle répond la version atteinte, ou -1 avec la raison dans <code>error()</code>.</p>
+<h3 id="ce-que-ce-n-est-pas">Ce que ce n'est pas</h3>
+<p>Il n'y a pas de mapping objet-relationnel, et il n'y en aura pas par accident. Une <code>Row</code> est une <code>Row</code> et non votre record, parce que passer de l'une à l'autre fait trois lignes lisibles, alors qu'un mapper qui le fait pour vous est un second langage à apprendre avant la première requête.</p>
+<p>Les limites honnêtes, toutes réelles :</p>
+<ul><li><strong>Une connexion.</strong> Le serveur est un fil ; une seconde connexion passerait sa vie à attendre la première. <code>Db</code> se ferme quand sa dernière référence disparaît, donc pas de pool à régler et rien à retenir.</li><li><strong><code>query</code> lit toutes les lignes en mémoire</strong>, d'un coup. Une requête qui pourrait en rendre un million doit dire <code>limit</code>. C'est énoncé plutôt que caché derrière un curseur qui a l'air paresseux et ne l'est pas.</li><li><strong>Pas de blobs.</strong> Une colonne <code>BLOB</code> lue par <code>text()</code> revient avec tout ce qui n'est pas de l'UTF-8 bien formé changé en U+FFFD — le même traitement que les octets d'une socket. Lisez <code>kind</code> d'abord si la colonne peut ne pas être du texte.</li><li><strong>SQLite seulement.</strong> Postgres, ce serait <code>libpq</code> par la même porte C, ou son protocole écrit en Keal — un projet à part entière dans les deux cas.</li></ul>
+<p><a href="examples.html#notes"><code>examples/notes.keal</code></a> est une page vivante dont l'état est une base : arrêtez-la, relancez-la, les notes sont là. Elle montre aussi la seule chose qu'une page vivante ne peut pas deviner — <code>site.live.refreshAll()</code> dans un minuteur, pour qu'une page apprenne un changement qu'elle n'a pas causé.</p>
+<h2 id="16-la-s-curit">16. La sécurité</h2>
+<p>Quatre idées, et il n'y en a pas de cinquième. Un <strong>mot de passe</strong> stockable, une <strong>session</strong> qui est un cookie signé et rien sur le serveur, une <strong>garde</strong> qui est une fonction ordinaire enveloppant un gestionnaire, et un <strong>jeton</strong> qui fait qu'un formulaire ne marche que s'il vient de votre page.</p>
+<p>Pas de hiérarchie de rôles, pas de langage d'expressions, pas de chaîne de filtres, pas d'annotations. Un rôle est une chaîne. Une règle est une fonction.</p>
+<pre class="lang-keal"><code>import &quot;kealeb/src/auth.keal&quot;
+
+val a = auth(secretFromFile(&quot;app.secret&quot;))
+site.secure(a)</code></pre>
+<p>Ces deux lignes allument quatre choses que personne ne devrait avoir à écrire :</p>
+<ul><li>chaque formulaire de chaque page reçoit un jeton CSRF caché, posé par le cadriciel en parcourant l'arbre ;</li><li>chaque <code>POST</code>, <code>PUT</code>, <code>PATCH</code> et <code>DELETE</code> est refusé sans lui ;</li><li>chaque réponse porte <code>nosniff</code>, <code>Referrer-Policy</code>, <code>X-Frame-Options</code> et une politique de contenu <code>default-src 'self'</code> sans place pour du script inline ;</li><li>une bascule WebSocket dont l'<code>Origin</code> est un autre site est refusée.</li></ul>
+<p>Il n'y a rien à configurer parce qu'il n'y a rien là-dedans que quelqu'un devrait vouloir éteindre. Ce qui reste à décider est ce qu'une application doit vraiment décider : qui peut se connecter, et ce qu'il peut faire ensuite.</p>
+<h3 id="le-secret">Le secret</h3>
+<p>Tout est une signature sous une clé, donc un programme qui la code en dur dans un dépôt public n'a aucune sécurité, et un programme qui en génère une neuve à chaque démarrage déconnecte tout le monde à chaque déploiement.</p>
+<pre class="lang-keal"><code>val a = auth(secretFromFile(&quot;app.secret&quot;))</code></pre>
+<p>Trente-deux octets aléatoires, faits au premier lancement, relus à tous les suivants. <strong>Gardez ce fichier hors du contrôle de version et sauvegardez-le</strong> : il signe chaque session et poivre chaque mot de passe, donc le perdre déconnecte tout le monde <em>et</em> rend chaque empreinte stockée invérifiable.</p>
+<h3 id="les-mots-de-passe">Les mots de passe</h3>
+<pre class="lang-keal"><code>val stored = a.hashPassword(quoi)                 // pbkdf2-sha256$25000$…$…
+if (a.checkPassword(quoi, stored)) { … }
+if (a.needsRehash(stored)) { ranger(a.hashPassword(quoi)) }</code></pre>
+<p>PBKDF2-HMAC-SHA256, écrit en Keal dans <code>src/hash.keal</code> et vérifié contre les vecteurs publiés à chaque construction. Un sel neuf de seize octets par mot de passe, et le nombre de tours rangé à côté — donc l'augmenter plus tard n'invalide rien, et <code>needsRehash</code> dit quand réécrire au nouveau compte.</p>
+<p><strong>Pourquoi 25 000 tours et non les 600 000 que demande l'OWASP</strong>, puisque l'écart compte et que le cacher serait pire que de l'avoir : ce serveur est un fil, donc hacher bloque toutes les autres requêtes le temps que ça prend. 25 000 coûtent environ 95 ms ici — mesuré, pas deviné. Au chiffre de l'OWASP, une connexion tiendrait la boucle deux secondes et demie, et dix connexions seraient un déni de service à la portée de n'importe qui.</p>
+<p>Trois choses portent le poids que le nombre de tours ne porte pas :</p>
+<ul><li><strong>Un poivre.</strong> Chaque mot de passe est haché avec un secret qui n'est pas dans la base. Une base volée n'est pas quelque chose contre quoi on peut deviner, quel que soit le nombre de tours, à moins que le secret n'ait fui aussi.</li><li><strong>Une limite de débit.</strong> <code>a.mayTry(clé)</code> autorise dix tentatives par minute et par clé. Appelez-la avec le nom du compte <em>et</em> avec le pair, pour qu'un compte ne puisse pas être bloqué depuis ailleurs et qu'une machine ne puisse pas parcourir une liste de noms.</li><li><strong>Le dire.</strong> Si votre serveur a du temps, <code>a.rounds = 100000</code> est une ligne, et elle coûte ce que la mesure dit qu'elle coûte.</li></ul>
+<h3 id="les-sessions">Les sessions</h3>
+<pre class="lang-keal"><code>a.signIn(redirect(&quot;/&quot;, 303), nom)       // pose le cookie
+a.signOut(redirect(&quot;/&quot;, 303))           // le supprime
+a.userOf(req)                           // String?, ou null
+a.signedIn(req)                         // Bool</code></pre>
+<p>Toute la session est le cookie : un nom et la seconde où il a été émis, signés. <code>HttpOnly</code>, <code>SameSite=Lax</code>, et <code>Secure</code> sauf si vous l'éteignez pour localhost.</p>
+<p>Il n'y a pas de table, donc rien n'expire côté serveur et rien ne grossit — et se déconnecter supprime un cookie, ce qui veut dire qu'un cookie volé reste bon jusqu'à son expiration. C'est le marché d'une session sans état, énoncé plutôt qu'enterré, et <code>a.ttl</code> en est le bouton (une semaine par défaut ; 0 signifie jusqu'à la fermeture du navigateur).</p>
+<h3 id="les-gardes">Les gardes</h3>
+<pre class="lang-keal"><code>site.get(&quot;/prive&quot;, requireUser(a, { req -&gt; … }))
+site.get(&quot;/admin&quot;, requireWhen(a, { qui -&gt; estAdmin(db, qui) }, { req -&gt; … }))</code></pre>
+<p><code>requireUser</code> envoie un inconnu vers <code>a.signInPath</code> avec <code>?next=</code> nommant où il allait, ou répond 401 quand <code>signInPath</code> est vide — ce que veut une API et pas un navigateur. <code>requireWhen</code> reçoit le nom et répond s'il a le droit ; quelqu'un de connecté mais non autorisé reçoit <strong>403</strong>, pas 404.</p>
+<p>Relire <code>?next=</code> est <code>nextAfter(req)</code>, et la vérification est tout l'intérêt : une redirection qui suit une valeur qu'un inconnu contrôle est la façon dont un lien d'hameçonnage emprunte votre domaine. Tout ce qui n'est pas un chemin enraciné sur une seule barre est refusé, <code>//evil.example</code> compris — c'est celui qu'on oublie.</p>
+<h3 id="le-jeton">Le jeton</h3>
+<p><code>site.secure(a)</code> pose un champ caché dans chaque formulaire construit par <code>page</code> ou <code>livePage</code> dont la méthode change quelque chose, et refuse chaque requête non sûre qui ne l'a pas. Une API peut l'envoyer comme <code>X-CSRF-Token</code> à la place.</p>
+<p>Le jeton est dérivé de la session plutôt que rangé, donc il ne demande aucun état et ne peut pas se désynchroniser, et un visiteur sans session en reçoit quand même un — ce dont le formulaire de connexion a besoin, puisqu'il doit marcher avant que quiconque soit connecté.</p>
+<p>Une lacune à connaître : un gestionnaire qui construit son propre document avec <code>doc(...)</code> plutôt que par <code>page</code> n'est pas parcouru, donc ajoutez-y <code>a.csrfInput(req)</code> vous-même. Le motif qui évite la question est POST-puis-redirection, que vous voulez de toute façon.</p>
+<h3 id="ce-que-cela-ne-fait-pas">Ce que cela ne fait pas</h3>
+<ul><li>Ni OAuth, ni SAML, ni LDAP, ni OpenID. Un mot de passe et un cookie.</li><li>Aucun modèle de permissions. <code>requireWhen</code> vous donne un nom et prend un <code>Bool</code> ; où vivent les rôles et ce qu'ils veulent dire regarde votre programme.</li><li>Pas de TLS. Mettez-le derrière un proxy inverse — et tant que ce n'est pas fait, <code>a.secure = false</code> ou le cookie ne partira pas du tout.</li><li>Pas de récupération de compte, pas de confirmation par courriel, pas de second facteur.</li><li><strong>La cryptographie est écrite à la main.</strong> <code>src/hash.keal</code> le dit en tête et dit pourquoi : l'alternative était de lier OpenSSL, ce qui fait une chose de plus à installer et une seconde réponse à <em>de quoi ceci dépend-il</em>. Chaque fonction y est tenue aux vecteurs publiés par qui l'a spécifiée — ceux du NIST pour SHA-256, ceux de la RFC 4231 pour HMAC, ceux de la RFC 7914 pour PBKDF2 — à chaque construction. C'est assez pour dire que les algorithmes sont les algorithmes. Ce n'est pas un audit, et ce guide ne prétendra pas que c'en est un.</li></ul>
+<h2 id="17-ce-que-le-cadriciel-ne-fera-pas">17. Ce que le cadriciel ne fera pas</h2>
+<ul><li>Il ne parlera à aucune base de données autre que SQLite, et seulement si vous la demandez par un second import et <code>-lsqlite3</code>.</li><li>Il ne fera pas correspondre les lignes à vos records tout seul. Voir §12.</li><li>Il ne compressera pas. Il ne parlera ni HTTP/2 ni TLS.</li><li>Il ne lira pas un corps de requête en morceaux — il répond <strong>501</strong> et le dit.</li><li>Il ne lira pas <code>multipart/form-data</code>, donc pas encore d'envoi de fichiers.</li><li>Il n'exécutera pas votre gestionnaire sur un autre fil, donc un gestionnaire qui bloque bloque le serveur. Répondez, et revenez.</li><li>Il n'échappera pas ce que vous mettez dans <code>raw</code>. C'est à cela que sert le nom.</li></ul>
+<hr>
+<h2 id="o-sont-les-choses">Où sont les choses</h2>
+<div class="tablewrap"><table><thead><tr><th>fichier</th><th>ce qu'il contient</th></tr></thead><tbody><tr><td><code>runtime/kb.h</code></td><td>toute la surface C : sockets, <code>poll</code>, blobs</td></tr><tr><td><code>src/ffi.keal</code></td><td>le seul fichier qui mentionne le C</td></tr><tr><td><code>src/bytes.keal</code></td><td>tampons d'octets, hexadécimal, Base64, SHA-1</td></tr><tr><td><code>src/text.keal</code></td><td>encodage pour-cent, formulaires, cookies, dates HTTP</td></tr><tr><td><code>src/http.keal</code></td><td><code>Request</code>, <code>Response</code>, le format du fil</td></tr><tr><td><code>src/router.keal</code></td><td>motifs, correspondance, aiguillage</td></tr><tr><td><code>src/server.keal</code></td><td>la boucle d'événements et l'automate par connexion</td></tr><tr><td><code>src/ui.keal</code></td><td>l'arbre de composants et le rendu</td></tr><tr><td><code>src/theme.keal</code></td><td>la feuille de style et le document</td></tr><tr><td><code>src/json.keal</code></td><td>JSON dans les deux sens</td></tr><tr><td><code>src/ws.keal</code></td><td>le tramage WebSocket</td></tr><tr><td><code>src/live.keal</code></td><td>les sessions, le diff, et le client du navigateur</td></tr><tr><td><code>src/css.keal</code></td><td>les feuilles de style, écrites en Keal</td></tr><tr><td><code>src/sql.keal</code></td><td>SQLite : valeurs liées, lignes, transactions, migrations</td></tr><tr><td><code>runtime/kb_sql.h</code></td><td>le C correspondant, seul à réclamer une bibliothèque</td></tr><tr><td><code>src/gzip.keal</code></td><td>DEFLATE et le conteneur gzip, codes fixes seulement</td></tr><tr><td><code>src/upload.keal</code></td><td><code>multipart/form-data</code>, analysé sur les octets</td></tr><tr><td><code>src/hash.keal</code></td><td>SHA-256, HMAC, PBKDF2 — avec l'avertissement qui va avec</td></tr><tr><td><code>src/auth.keal</code></td><td>mots de passe, sessions, gardes, jeton CSRF</td></tr><tr><td><code>src/app.keal</code></td><td>la porte d'entrée depuis laquelle tout ce qui précède est joignable</td></tr></tbody></table></div></div><div class="dtoc"><div class="h">SUR CETTE PAGE</div><div class="dtoc-items"><a href="#1-un-programme">1. Un programme</a><a href="#2-utiliser-kealeb-depuis-votre-propre-projet">2. Utiliser kealeb depuis votre propre projet</a><a href="#3-les-routes">3. Les routes</a><a href="#4-la-requ-te">4. La requête</a><a href="#5-la-r-ponse">5. La réponse</a><a href="#6-les-pages">6. Les pages</a><a href="#7-les-formulaires-sans-javascript">7. Les formulaires sans JavaScript</a><a href="#8-les-pages-vivantes">8. Les pages vivantes</a><a href="#9-les-fichiers-statiques">9. Les fichiers statiques</a><a href="#10-json">10. JSON</a><a href="#11-les-tests">11. Les tests</a><a href="#12-les-filtres">12. Les filtres</a><a href="#13-la-mise-en-service">13. La mise en service</a><a href="#14-le-travail-programm">14. Le travail programmé</a><a href="#15-une-base-de-donn-es">15. Une base de données</a><a href="#16-la-s-curit">16. La sécurité</a><a href="#17-ce-que-le-cadriciel-ne-fera-pas">17. Ce que le cadriciel ne fera pas</a><a href="#o-sont-les-choses">Où sont les choses</a></div></div></div>
+<footer class="foot">
+  <div class="foot-l">Un cadriciel web pour Keal : des routes, des pages, et l'état qui reste sur le serveur. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealeb">Les sources sur GitHub</a>
+    <a href="https://geneacta.github.io/keal/">Le langage Keal</a>
+    <a href="https://github.com/geneacta/kealeb/issues">Signalements</a>
+  </div>
+</footer>
+</div>
+</body>
+</html>

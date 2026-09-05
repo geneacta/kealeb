@@ -1,0 +1,50 @@
+# Deploys site/ to GitHub Pages.
+#
+# One-time setup, and it is the only part nobody here can do:
+# Settings → Pages → Source: "GitHub Actions".
+#
+# The site is generated from the repository's own documents by
+# `python3 site/build.py`, and the generated pages are committed — so what is
+# deployed is what was reviewed, and a change to the guide that nobody
+# regenerated shows up as a diff rather than as a page that quietly disagrees
+# with the repository. The build runs here too, and fails if the two differ.
+name: pages
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "docs/**", "README.md", "examples/**", "src/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The generated pages are in the repository. If regenerating them here
+      # changes anything, somebody edited a document and did not rebuild — and
+      # the site would have gone out saying something the repository does not.
+      - name: The site is what the repository says
+        run: |
+          python3 site/build.py
+          git diff --exit-code -- site/ || {
+            echo
+            echo "site/ is out of date: run python3 site/build.py and commit what changes."
+            exit 1
+          }
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

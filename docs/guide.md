@@ -6,6 +6,8 @@ to end. Every snippet here is code that compiles; the examples in
 
 *Le même parcours en français : [`guide.fr.md`](guide.fr.md).*
 
+*Also on the web, laid out: [geneacta.github.io/kealeb](https://geneacta.github.io/kealeb/) — and the language this is written in, [Keal](https://geneacta.github.io/keal/).*
+
 ---
 
 ## 1. A program

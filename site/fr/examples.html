@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kealeb — Exemples</title>
+<meta name="description" content="Chacun est un programme entier de ce dépôt, construit et exécuté par la suite de tests. Le texte au-dessus de chacun est le commentaire en tête du fichier.">
+<link rel="canonical" href="https://geneacta.github.io/kealeb/fr/examples.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealeb/examples.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealeb/fr/examples.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealeb/examples.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kealeb">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="kealeb — Exemples">
+<meta property="og:description" content="Chacun est un programme entier de ce dépôt, construit et exécuté par la suite de tests. Le texte au-dessus de chacun est le commentaire en tête du fichier.">
+<meta property="og:url" content="https://geneacta.github.io/kealeb/fr/examples.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="kealeb — Exemples">
+<meta name="twitter:description" content="Chacun est un programme entier de ce dépôt, construit et exécuté par la suite de tests. Le texte au-dessus de chacun est le commentaire en tête du fichier.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a class="wordmark" href="index.html">kealeb</a>
+    <div class="nav-links"><a href="index.html">Accueil</a><a href="guide.html">Le guide</a><a href="examples.html" class="tab-active">Exemples</a></div>
+  </div>
+  <div class="nav-right">
+    <a class="btn-keal" href="https://geneacta.github.io/keal/">Keal ↗</a>
+    <a class="btn-lang" href="../examples.html">English</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
+  </div>
+</nav>
+<div class="doc-head"><h1>Exemples</h1><p class="sub">Chacun est un programme entier de ce dépôt, construit et exécuté par la suite de tests. Le texte au-dessus de chacun est le commentaire en tête du fichier.</p></div><div class="dgrid"><div></div><div class="dmain prose"><section class="ex" id="hello"><h2>hello.keal</h2><p>The smallest kealeb program that is worth reading.</p>
+<p>    tools/build.sh examples/hello.keal &amp;&amp; build/hello</p>
+<p>Three routes: a page built out of components, a plain-text handler that reads what the path captured, and a form that posts to itself.</p><pre class="mono">val site = app(&quot;kealeb — hello&quot;)
+
+site.page(&quot;/&quot;, { req -&gt; column([
+    h1(&quot;kealeb&quot;),
+    p(&quot;A web framework written in Keal. This page is a tree of components, rendered on the server.&quot;),
+    card([
+        h3(&quot;Try&quot;),
+        ul([
+            li([link(&quot;/hi/world&quot;, &quot;/hi/world&quot;), txt(&quot; — a path parameter&quot;)]),
+            li([link(&quot;/greet&quot;, &quot;/greet&quot;), txt(&quot; — a form, posting to itself&quot;)])
+        ])
+    ]),
+    p(&quot;Served from ${req.peer}.&quot;).cls(&quot;kb-muted&quot;)
+])})
+
+site.get(&quot;/hi/{name}&quot;, { req -&gt; text(&quot;hello ${req.param(&quot;name&quot;)}&quot;) })
+
+site.page(&quot;/greet&quot;, { req -&gt; column([
+    h1(&quot;Greet&quot;),
+    el(&quot;form&quot;).attr(&quot;method&quot;, &quot;post&quot;).add(row([
+        el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;name&quot;, &quot;name&quot;).attr(&quot;placeholder&quot;, &quot;your name&quot;),
+        submit(&quot;Say hello&quot;)
+    ]))
+])}, &quot;kealeb — greet&quot;)
+
+site.post(&quot;/greet&quot;, { req -&gt;
+    val name = req.form().get(&quot;name&quot;) ?: &quot;&quot;
+    html(doc(&quot;kealeb — greet&quot;, column([
+        h1(&quot;Hello, ${name.isEmpty() ? &quot;stranger&quot; : name}&quot;),
+        link(&quot;/greet&quot;, &quot;again&quot;)
+    ])))
+})
+
+site.run(8080)</pre></section><section class="ex" id="counter"><h2>counter.keal</h2><p>A live page: the state is on the server, and only the difference travels.</p>
+<p>    tools/build.sh examples/counter.keal &amp;&amp; build/counter</p>
+<p><code>livePage</code> calls the outer function once per visitor. Whatever it closes over is that visitor's own state — there is no session map to key correctly, because the closure <em>is</em> the session. What it answers is called again after every event, and what reaches the browser is the list of changes between the tree it built last time and the tree it built now.</p><pre class="mono">val site = app(&quot;kealeb — counter&quot;)
+
+site.livePage(&quot;/&quot;, { req -&gt;
+    var count = 0
+    var step = 1
+    view({ -&gt; column([
+        h1(&quot;Clicked ${count} times&quot;),
+        p(&quot;Nothing on this page is JavaScript you wrote. The tree lives on the server.&quot;).cls(&quot;kb-muted&quot;),
+        card([
+            row([
+                button(&quot;−${step}&quot;, { e -&gt; count = count - step }),
+                button(&quot;+${step}&quot;, { e -&gt; count = count + step }).cls(&quot;kb-primary&quot;),
+                button(&quot;reset&quot;, { e -&gt; count = 0 })
+            ]),
+            row([
+                label(&quot;step&quot;),
+                select(&quot;${step}&quot;, [(&quot;1&quot;, &quot;1&quot;), (&quot;5&quot;, &quot;5&quot;), (&quot;10&quot;, &quot;10&quot;)],
+                       { e -&gt; step = e.number(1) })
+            ])
+        ]),
+        shownWhen(count &gt; 9, p(&quot;Nine is enough, surely.&quot;).cls(&quot;kb-muted&quot;))
+    ]) })
+})
+
+/// The port is an argument so that a test can ask for 0 and be told which one
+/// the machine chose. Hard-coding it would make this example unrunnable
+/// while anything else holds the port — including a previous run of itself.
+val chosen = args().size &gt; 0 ? (args()[0].toInt() ?: 8080) : 8080
+site.run(chosen)</pre></section><section class="ex" id="todo"><h2>todo.keal</h2><p>A list you can add to, tick off and filter — the example that shows what a live page is actually for.</p>
+<p>    tools/build.sh examples/todo.keal &amp;&amp; build/todo</p>
+<p>Everything here is Keal. There is no template, no client state and no JavaScript: the page is a function from three variables to a tree, and the framework works out what changed. Typing in the field sends one event per keystroke and gets back one patch — the field's own value, because the server is what decides what a field holds. Nothing else on the page moves until the task is added.</p>
+<p>Every row says which task it is with <code>.keyed</code>. Without it a node's identity is its position, so removing the first row would hand its browser node — its focus, its caret — to the task that moved up into its place.</p>
+<p>Two shapes here are the language's, not the framework's. They are written out separately because they are separate: when one of them stops being true, the other still is, and nobody should remove both in one edit.</p>
+<p><strong>The helpers are top-level, not nested in the factory.</strong> <code>keal build</code> does not compile nested functions — it refuses them by name rather than getting them wrong. When it does compile them, <code>setDone</code> and <code>forget</code> belong inside the factory, next to the list they act on.</p>
+<p><strong>They take the list and an index, not the task.</strong> The contents of a parameter belong to the caller unless the signature says <code>var</code>, and a lambda's parameter cannot say it — so a handler cannot be handed a <code>Task</code> it is allowed to change. This one is not waiting on a compiler: it follows from what a function type can express, and it would still be true with nested functions.</p><pre class="mono">class Task(public val id: Int, public var what: String, public var done: Bool)
+
+/// Where a task&#x27;s identity comes from. It has to come from somewhere other
+/// than the position in the list: remove the first row and every row below
+/// moves up one, and without an identity the browser keeps the node — and
+/// with it the focus and the caret, which now belong to a different task.
+var nextId = 0
+
+func freshTask(what: String, done: Bool): Task {
+    nextId = nextId + 1
+    return Task(nextId, what, done)
+}
+
+/// Tick one off, or un-tick it.
+proc setDone(var tasks: List&lt;Task&gt;, at: Int, on: Bool) {
+    if ((at &lt; 0) or (at &gt;= tasks.size)) { return }
+    tasks[at].done = on
+}
+
+/// Take one out.
+proc forget(var tasks: List&lt;Task&gt;, at: Int) {
+    if ((at &lt; 0) or (at &gt;= tasks.size)) { return }
+    tasks.removeAt(at)
+}
+
+val site = app(&quot;kealeb — tasks&quot;)
+
+site.livePage(&quot;/&quot;, { req -&gt;
+    val tasks: List&lt;Task&gt; = [freshTask(&quot;Read the guide&quot;, true), freshTask(&quot;Write a page&quot;, false)]
+    var draft = &quot;&quot;
+    var showing = &quot;all&quot;
+
+    val add = { e: Ev -&gt;
+        val what = draft.trim()
+        if (not what.isEmpty()) {
+            tasks.add(freshTask(what, false))
+            draft = &quot;&quot;
+        }
+    }
+
+    view({ -&gt;
+        val rows: List&lt;Node&gt; = []
+        var i = 0
+        for (t in tasks) {
+            val at = i
+            i = i + 1
+            val wanted = (showing == &quot;all&quot;) or ((showing == &quot;done&quot;) == t.done)
+            if (not wanted) { continue }
+            val what = span(t.what)
+            if (t.done) { what.style(&quot;text-decoration: line-through; opacity: .55&quot;) }
+            rows.add(row([
+                checkbox(t.done, { e -&gt; setDone(tasks, at, e.checked()) }),
+                what,
+                button(&quot;remove&quot;, { e -&gt; forget(tasks, at) }).cls(&quot;kb-danger&quot;)
+            ]).keyed(&quot;task-${t.id}&quot;))
+        }
+        val left = tasks.count({ t -&gt; not t.done })
+        column([
+            h1(&quot;Tasks&quot;),
+            p(&quot;${left} left of ${tasks.size}.&quot;).cls(&quot;kb-muted&quot;),
+            card([
+                row([
+                    field(draft, { e -&gt; draft = e.value }).style(&quot;flex: 1&quot;),
+                    button(&quot;Add&quot;, add).cls(&quot;kb-primary&quot;)
+                ]),
+                row([
+                    label(&quot;show&quot;),
+                    select(showing, [(&quot;all&quot;, &quot;everything&quot;), (&quot;todo&quot;, &quot;not done&quot;), (&quot;done&quot;, &quot;done&quot;)],
+                           { e -&gt; showing = e.value })
+                ])
+            ]),
+            column(rows),
+            shownWhen(rows.isEmpty(), p(&quot;Nothing here.&quot;).cls(&quot;kb-muted&quot;))
+        ])
+    })
+})
+
+site.run(8080)</pre></section><section class="ex" id="notes"><h2>notes.keal</h2><p>A live page whose state is a database — the example that ties the two halves together.</p>
+<p>    tools/build.sh examples/notes.keal -lsqlite3 &amp;&amp; build/notes</p>
+<p>The <code>-lsqlite3</code> is the whole cost of the database layer, and it is only paid by a program that imports it. Stop the server and start it again: the notes are still there, which is the point.</p>
+<p><strong>The page is a function of the database.</strong> Every render runs the query again rather than keeping a copy in the session, so there is nothing to invalidate and nothing that can be stale. That is the right shape for a table of this size and the wrong one for a million rows, where the query would want a <code>limit</code> and a page number; the framework does not hide which one you are writing.</p>
+<p>Two open browsers see each other's notes, because they share the database — but only after the second one does something, because a live page rebuilds on its own events. <code>site.live.refreshAll()</code> in a timer is how a page learns about a change it did not cause, and the timer below shows it.</p><pre class="mono">val db = openDb(&quot;notes.db&quot;)
+
+/// Add one, and answer whether it worked. A top-level `proc` taking `var db`
+/// rather than a lambda closing over it: the closures in the page below may
+/// read `db`, but the ones that change it are named, so the writes are a list
+/// you can find.
+proc add(var db: Db, body: String) {
+    val text = body.trim()
+    if (text.isEmpty()) { return }
+    db.run(&quot;insert into note(body, made) values (?, ?)&quot;, [vText(text), vInt(epochS())])
+}
+
+proc setDone(var db: Db, id: Int, done: Bool) {
+    db.run(&quot;update note set done = ? where id = ?&quot;, [vBool(done), vInt(id)])
+}
+
+proc forget(var db: Db, id: Int) {
+    db.run(&quot;delete from note where id = ?&quot;, [vInt(id)])
+}
+
+val site = app(&quot;kealeb — notes&quot;)
+
+/// Keal calls `main` by itself once the top level has run, so this is not
+/// called from anywhere: naming it `main` **and** calling it would run the
+/// whole program twice.
+proc main() {
+    if (db == null) {
+        println(&quot;could not open notes.db&quot;)
+        exit(1)
+    }
+
+    // Every migration this program has ever had, in order, never reordered.
+    // A database already at version 2 runs nothing.
+    val reached = db.migrate([
+        &quot;create table note(id integer primary key, body text not null, done integer not null default 0)&quot;,
+        &quot;alter table note add column made integer not null default 0&quot;
+    ])
+    if (reached &lt; 0) {
+        println(&quot;the schema could not be brought up to date: ${db.error()}&quot;)
+        exit(1)
+    }
+    println(&quot;notes.db is at version ${reached}, holding ${db.value(&quot;select count(*) from note&quot;).int()} note(s)&quot;)
+
+    site.livePage(&quot;/&quot;, { req -&gt;
+        var draft = &quot;&quot;
+        view({ -&gt;
+            val rows = db.query(&quot;select id, body, done from note order by done, id desc limit 200&quot;, [])
+            val left = db.value(&quot;select count(*) from note where done = 0&quot;).int()
+
+            val items: List&lt;Node&gt; = []
+            for (r in rows) {
+                val id = r.int(&quot;id&quot;)
+                val done = r.bool(&quot;done&quot;)
+                val body = span(r.text(&quot;body&quot;))
+                if (done) { body.style(&quot;text-decoration: line-through; opacity: .55&quot;) }
+                items.add(row([
+                    checkbox(done, { e -&gt; setDone(db, id, e.checked()) }),
+                    body,
+                    button(&quot;remove&quot;, { e -&gt; forget(db, id) }).cls(&quot;kb-danger&quot;)
+                ]).keyed(&quot;note-${id}&quot;))
+            }
+
+            column([
+                h1(&quot;Notes&quot;),
+                p(&quot;${left} left, of ${rows.size} shown. Kept in notes.db — stop the server and come back.&quot;).cls(&quot;kb-muted&quot;),
+                card([row([
+                    field(draft, { e -&gt; draft = e.value }).style(&quot;flex: 1&quot;),
+                    button(&quot;Add&quot;, { e -&gt; add(db, draft); draft = &quot;&quot; }).cls(&quot;kb-primary&quot;)
+                ])]),
+                column(items),
+                shownWhen(items.isEmpty(), p(&quot;Nothing yet.&quot;).cls(&quot;kb-muted&quot;))
+            ])
+        })
+    })
+
+    // A page learns about a change it did not cause when something tells it
+    // to look again. Once a second is coarse and it is honest about being so:
+    // a rebuild that finds nothing different sends nothing, so an idle page
+    // costs a query and no bytes.
+    site.every(1000, { -&gt; site.live.refreshAll() })
+
+    // The port is an argument so a test can ask for 0 and be told which one it
+    // got. Hard-coding it makes the example unrunnable while anything else
+    // holds the port — including a previous run of itself.
+    site.run(args().size &gt; 0 ? (args()[0].toInt() ?: 8080) : 8080)
+}</pre></section><section class="ex" id="signin"><h2>signin.keal</h2><p>Signing in: a password in a database, a session in a cookie, a page nobody else can see.</p>
+<p>    tools/build.sh examples/signin.keal -lsqlite3 &amp;&amp; build/signin</p>
+<p>Everything security-shaped here is four lines — <code>site.secure(a)</code>, one <code>requireUser</code>, one <code>hashPassword</code>, one <code>checkPassword</code> — and the rest is an ordinary application. The CSRF token in the two forms below was not written by anybody: <code>secure</code> walks each page and puts it there.</p>
+<p>The secret is read from <code>signin.secret</code>, made on the first run. <strong>Keep that file out of git and back it up</strong>: it signs every session and peppers every password, so losing it signs everybody out and makes every stored hash unverifiable.</p><pre class="mono">val db = openDb(&quot;signin.db&quot;)
+val site = app(&quot;kealeb — sign in&quot;)
+
+proc userPage(var site: App, a: Auth, var db: Db) {
+    site.get(&quot;/private&quot;, requireUser(a, { req -&gt;
+        val who = a.userOf(req) ?: &quot;?&quot;
+        html(doc(&quot;Private&quot;, column([
+            h1(&quot;Hello, ${who}&quot;),
+            p(&quot;Only somebody signed in reaches this page. A stranger is sent to the sign-in form with `?next=/private`, and lands back here afterwards.&quot;).cls(&quot;kb-muted&quot;),
+            el(&quot;form&quot;).attr(&quot;method&quot;, &quot;post&quot;).attr(&quot;action&quot;, &quot;/sign-out&quot;).add(submit(&quot;Sign out&quot;)),
+            link(&quot;/&quot;, &quot;home&quot;)
+        ])))
+    }))
+}
+
+/// Keal calls `main` by itself once the top level has run, so this is not
+/// called from anywhere: naming it `main` **and** calling it would run the
+/// whole program twice.
+proc main() {
+    if (db == null) {
+        println(&quot;could not open signin.db&quot;)
+        exit(1)
+    }
+    if (db.migrate([
+        &quot;create table person(name text primary key, secret text not null, made integer not null)&quot;
+    ]) &lt; 0) {
+        println(&quot;the schema could not be brought up to date: ${db.error()}&quot;)
+        exit(1)
+    }
+
+    val a = auth(secretFromFile(&quot;signin.secret&quot;))
+    // Only while developing: the session cookie is sent without `Secure` so it
+    // survives plain http on localhost. In production this line goes.
+    a.secure = false
+    site.secure(a)
+
+    site.page(&quot;/&quot;, { req -&gt;
+        val who = a.userOf(req)
+        column([
+            h1(&quot;kealeb — signing in&quot;),
+            p(&quot;${db.value(&quot;select count(*) from person&quot;).int()} account(s) in signin.db.&quot;).cls(&quot;kb-muted&quot;),
+            card([
+                who == null ? p(&quot;Nobody is signed in.&quot;) : p(&quot;Signed in as ${who}.&quot;),
+                row([link(&quot;/private&quot;, &quot;a page for members&quot;), link(&quot;/sign-in&quot;, &quot;sign in&quot;),
+                     link(&quot;/register&quot;, &quot;make an account&quot;)])
+            ])
+        ])
+    })
+
+    // ------------------------------------------------------------ sign in
+
+    site.page(&quot;/sign-in&quot;, { req -&gt; column([
+        h1(&quot;Sign in&quot;),
+        shownWhen(req.queryOr(&quot;e&quot;) == &quot;no&quot;, p(&quot;That name and password do not go together.&quot;).cls(&quot;kb-danger&quot;)),
+        shownWhen(req.queryOr(&quot;e&quot;) == &quot;slow&quot;, p(&quot;Too many tries. Wait a minute.&quot;).cls(&quot;kb-danger&quot;)),
+        card([el(&quot;form&quot;).attr(&quot;method&quot;, &quot;post&quot;).addAll([
+            column([
+                label(&quot;name&quot;), el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;name&quot;, &quot;name&quot;).attr(&quot;autocomplete&quot;, &quot;username&quot;),
+                label(&quot;password&quot;), el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;type&quot;, &quot;password&quot;).attr(&quot;name&quot;, &quot;password&quot;).attr(&quot;autocomplete&quot;, &quot;current-password&quot;),
+                el(&quot;input&quot;).attr(&quot;type&quot;, &quot;hidden&quot;).attr(&quot;name&quot;, &quot;next&quot;).attr(&quot;value&quot;, nextAfter(req)),
+                row([submit(&quot;Sign in&quot;)])
+            ])
+        ])]),
+        link(&quot;/register&quot;, &quot;or make an account&quot;)
+    ])}, &quot;Sign in&quot;)
+
+    site.post(&quot;/sign-in&quot;, { req -&gt;
+        val form = req.form()
+        val name = (form.get(&quot;name&quot;) ?: &quot;&quot;).trim()
+        val password = form.get(&quot;password&quot;) ?: &quot;&quot;
+        val where = form.get(&quot;next&quot;) ?: &quot;/&quot;
+
+        // Both the name and the peer, so one account cannot be locked out from
+        // elsewhere and one machine cannot work through a list of names.
+        if (not (a.mayTry(&quot;name:&quot; + name) and a.mayTry(&quot;from:&quot; + req.peer))) {
+            redirect(&quot;/sign-in?e=slow&quot;, 303)
+        } else {
+            val row = db.one(&quot;select secret from person where name = ?&quot;, [vText(name)])
+            // The same work whether or not the account exists: verifying
+            // against a hash of nothing takes as long as verifying against a
+            // real one, so how long the answer took does not say whether the
+            // name is a name.
+            var stored = &quot;&quot;
+            if (row == null) { stored = a.hashPassword(&quot;no such person&quot;) } else { stored = row.text(&quot;secret&quot;) }
+            if ((row != null) and a.checkPassword(password, stored)) {
+                a.succeeded(&quot;name:&quot; + name)
+                if (a.needsRehash(stored)) {
+                    db.run(&quot;update person set secret = ? where name = ?&quot;,
+                           [vText(a.hashPassword(password)), vText(name)])
+                }
+                a.signIn(redirect(where.startsWith(&quot;/&quot;) ? where : &quot;/&quot;, 303), name)
+            } else {
+                redirect(&quot;/sign-in?e=no&quot;, 303)
+            }
+        }
+    })
+
+    site.post(&quot;/sign-out&quot;, { req -&gt; a.signOut(redirect(&quot;/&quot;, 303)) })
+
+    // ------------------------------------------------------------ register
+
+    site.page(&quot;/register&quot;, { req -&gt; column([
+        h1(&quot;Make an account&quot;),
+        shownWhen(req.queryOr(&quot;e&quot;) == &quot;taken&quot;, p(&quot;That name is taken.&quot;).cls(&quot;kb-danger&quot;)),
+        shownWhen(req.queryOr(&quot;e&quot;) == &quot;short&quot;, p(&quot;Eight characters at least, please.&quot;).cls(&quot;kb-danger&quot;)),
+        card([el(&quot;form&quot;).attr(&quot;method&quot;, &quot;post&quot;).add(column([
+            label(&quot;name&quot;), el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;name&quot;, &quot;name&quot;),
+            label(&quot;password&quot;), el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;type&quot;, &quot;password&quot;).attr(&quot;name&quot;, &quot;password&quot;).attr(&quot;autocomplete&quot;, &quot;new-password&quot;),
+            row([submit(&quot;Make it&quot;)])
+        ]))]),
+        link(&quot;/sign-in&quot;, &quot;or sign in&quot;)
+    ])}, &quot;Register&quot;)
+
+    site.post(&quot;/register&quot;, { req -&gt;
+        val form = req.form()
+        val name = (form.get(&quot;name&quot;) ?: &quot;&quot;).trim()
+        val password = form.get(&quot;password&quot;) ?: &quot;&quot;
+        if (name.isEmpty() or (password.length &lt; 8)) {
+            redirect(&quot;/register?e=short&quot;, 303)
+        } else if (db.one(&quot;select name from person where name = ?&quot;, [vText(name)]) != null) {
+            redirect(&quot;/register?e=taken&quot;, 303)
+        } else {
+            db.run(&quot;insert into person(name, secret, made) values (?, ?, ?)&quot;,
+                   [vText(name), vText(a.hashPassword(password)), vInt(epochS())])
+            a.signIn(redirect(&quot;/private&quot;, 303), name)
+        }
+    })
+
+    userPage(site, a, db)
+    // The port is an argument so a test can ask for 0 and be told which one it
+    // got. Hard-coding it makes the example unrunnable while anything else
+    // holds the port — including a previous run of itself.
+    site.run(args().size &gt; 0 ? (args()[0].toInt() ?: 8080) : 8080)
+}</pre></section><section class="ex" id="files"><h2>files.keal</h2><p>Serving a directory — and what happens when what is in it is bigger than the machine.</p>
+<p>    tools/build.sh examples/files.keal &amp;&amp; build/files 8080 ./public</p>
+<p>Two lines do the work. Everything else in this file is the index page, so there is something to click.</p>
+<p>A file under a megabyte is read into memory: it can be compressed, which is worth four or five times its size on a stylesheet, and holding it costs nothing. Above that the server opens it and sends it as the socket takes it, a quarter of a megabyte at a time. Measured on a hundred-megabyte file: <strong>3 MB of memory streaming it, 235 MB reading it whole</strong> — which is the difference between serving it and refusing to.</p>
+<p>Both paths answer <code>Range</code>, so a video seeks and a download resumes.</p><pre class="mono">val site = app(&quot;kealeb — files&quot;)
+
+/// Keal calls `main` by itself once the top level has run, so this is not
+/// called from anywhere.
+proc main() {
+    val port = args().size &gt; 0 ? (args()[0].toInt() ?: 8080) : 8080
+    val dir = args().size &gt; 1 ? args()[1] : &quot;./public&quot;
+
+    site.files(&quot;/f&quot;, dir)
+
+    site.page(&quot;/&quot;, { req -&gt; column([
+        h1(&quot;Files&quot;),
+        p(&quot;Serving ${dir} at /f — with ETags, byte ranges, and gzip on what is worth it.&quot;).cls(&quot;kb-muted&quot;),
+        card([
+            h3(&quot;What is in there&quot;),
+            listing(dir)
+        ]),
+        p(&quot;A file over ${streamFrom / (1024 * 1024)} MB is streamed rather than read: the server holds a quarter of a megabyte of it, whatever its size.&quot;).cls(&quot;kb-muted&quot;)
+    ])})
+
+    site.run(port, &quot;127.0.0.1&quot;)
+}
+
+func listing(dir: String): Node {
+    val names = listDir(dir)
+    if (names == null) { return p(&quot;There is no ${dir} to serve.&quot;).cls(&quot;kb-danger&quot;) }
+    if (names.isEmpty()) { return p(&quot;It is empty.&quot;).cls(&quot;kb-muted&quot;) }
+    val rows: List&lt;Node&gt; = []
+    for (name in names.sorted()) {
+        val size = fileSize(&quot;${dir}/${name}&quot;)
+        if (size &lt; 0) { continue }
+        rows.add(row([
+            link(&quot;/f/${name}&quot;, name),
+            span(readable(size)).cls(&quot;kb-muted&quot;),
+            span(size &gt; streamFrom ? &quot;streamed&quot; : &quot;in memory&quot;).cls(&quot;kb-muted&quot;)
+        ]).keyed(name))
+    }
+    return column(rows)
+}
+
+func readable(bytes: Int): String {
+    if (bytes &lt; 1024) { return &quot;${bytes} B&quot; }
+    if (bytes &lt; (1024 * 1024)) { return &quot;${bytes / 1024} KB&quot; }
+    return &quot;${bytes / (1024 * 1024)} MB&quot;
+}</pre></section></div><div></div></div>
+<footer class="foot">
+  <div class="foot-l">Un cadriciel web pour Keal : des routes, des pages, et l'état qui reste sur le serveur. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealeb">Les sources sur GitHub</a>
+    <a href="https://geneacta.github.io/keal/">Le langage Keal</a>
+    <a href="https://github.com/geneacta/kealeb/issues">Signalements</a>
+  </div>
+</footer>
+</div>
+</body>
+</html>

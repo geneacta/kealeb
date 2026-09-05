@@ -8,6 +8,7 @@
 #   guide     every snippet the guide promises, compiled
 #   sql       the database layer, against a real SQLite in memory
 #   gz        what the compressor produced, read by two decompressors
+#   site      the pages, rebuilt — and required not to differ from what is committed
 #   units     the buffers, encodings, parser, router, renderer and diff
 #   lifetime  an application built, used, dropped — and leaving nothing
 #   leaks     a cycle built on purpose, which the audit must still see
@@ -117,6 +118,32 @@ found=$(cd build && ./leaks 2>&1)
   exit 1
 }
 echo "a cycle built on purpose is still reported as exactly one"
+
+# The site, and whether it still says what the repository says.
+#
+# The pages are generated from the guide and the examples and committed, so a
+# document edited without rebuilding is a site that quietly disagrees with the
+# repository it describes. Rebuilding here and looking for a difference is what
+# notices. The build also checks every relative link on every page, because a
+# set of pages promising each other exist is a promise nothing keeps by itself.
+if command -v python3 >/dev/null 2>&1; then
+  printf '%-8s ' "site"
+  before=$(find site -name '*.html' -newer site/build.py 2>/dev/null | wc -l)
+  python3 site/build.py > build/site.out
+  if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+    if ! git diff --quiet -- site/ 2>/dev/null; then
+      echo "FAILED — site/ is out of date."
+      echo "  A document changed and the pages were not rebuilt, so the site would"
+      echo "  say something this repository does not. What differs:"
+      git diff --stat -- site/ | sed 's/^/    /'
+      echo "  Run python3 site/build.py and commit what it changes."
+      exit 1
+    fi
+  fi
+  echo "$(grep -c . build/site.out) pages, and every link on them resolves"
+else
+  echo "site     skipped — no python3, so the site is neither built nor checked"
+fi
 
 # gzip, read by something that did not write it.
 #

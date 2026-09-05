@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The kealeb guide</title>
+<meta name="description" content="Routes, pages, live pages, the widgets, a database, security, and what the framework will not do.">
+<link rel="canonical" href="https://geneacta.github.io/kealeb/guide.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealeb/guide.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealeb/fr/guide.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealeb/guide.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kealeb">
+<meta property="og:locale" content="en_GB">
+<meta property="og:title" content="The kealeb guide">
+<meta property="og:description" content="Routes, pages, live pages, the widgets, a database, security, and what the framework will not do.">
+<meta property="og:url" content="https://geneacta.github.io/kealeb/guide.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="The kealeb guide">
+<meta name="twitter:description" content="Routes, pages, live pages, the widgets, a database, security, and what the framework will not do.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a class="wordmark" href="index.html">kealeb</a>
+    <div class="nav-links"><a href="index.html">Home</a><a href="guide.html" class="tab-active">Guide</a><a href="examples.html">Examples</a></div>
+  </div>
+  <div class="nav-right">
+    <a class="btn-keal" href="https://geneacta.github.io/keal/">Keal ↗</a>
+    <a class="btn-lang" href="fr/guide.html">Français</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
+  </div>
+</nav>
+<div class="dgrid"><div></div><div class="dmain prose"><div class="doc-head"><h1>The kealeb guide</h1></div><p>Everything the framework does, in the order you will meet it. Half an hour end to end. Every snippet here is code that compiles; the examples in <a href="https://github.com/geneacta/kealeb/blob/main/examples"><code>examples/</code></a> are the longer versions.</p>
+<p><em>Also on the web, laid out: <a href="https://geneacta.github.io/kealeb/">geneacta.github.io/kealeb</a> — and the language this is written in, <a href="https://geneacta.github.io/keal/">Keal</a>.</em></p>
+<hr>
+<h2 id="1-a-program">1. A program</h2>
+<pre class="lang-keal"><code>import &quot;kealeb/kealeb.keal&quot;
+
+val site = app(&quot;My site&quot;)
+
+site.page(&quot;/&quot;, { req -&gt; column([
+    h1(&quot;Hello&quot;),
+    p(&quot;from Keal&quot;)
+])})
+
+site.run(8080)</code></pre>
+<pre class="lang-sh"><code>tools/build.sh hello.keal
+build/hello</code></pre>
+<p><code>app(title)</code> makes an application. <code>run(port)</code> serves until the process stops. Between those two lines you register what the site answers.</p>
+<p>The import is the umbrella: everything in this guide is visible after it. A program that wants less can import one module — <code>import "kealeb/src/http.keal"</code> brings the request and the response and nothing else.</p>
+<h2 id="2-using-kealeb-from-your-own-project">2. Using kealeb from your own project</h2>
+<p>The guide so far assumes you are inside this repository. You do not have to be. kealeb is a Keal package, and a project that wants it says so:</p>
+<pre class="lang-toml"><code># keal.toml
+[package]
+name = &quot;myproject&quot;
+version = &quot;0.1.0&quot;
+
+[dependencies]
+kealeb = { git = &quot;https://github.com/geneacta/kealeb&quot;, tag = &quot;v0.1.0&quot; }</code></pre>
+<pre class="lang-sh"><code>keal fetch                                  # puts it in .keal/deps/kealeb
+.keal/deps/kealeb/tools/build.sh app.keal   # output lands in *your* build/</code></pre>
+<pre class="lang-keal"><code>import &quot;dep:kealeb/kealeb.keal&quot;</code></pre>
+<p>The build script is the one part that is not just <code>keal build</code>, and only because of one flag: kealeb's C surface is a header, and the compiler has to be told where it is. Running it from the dependency does that, and puts the executable in your directory rather than in kealeb's. If you would rather see the whole command:</p>
+<pre class="lang-sh"><code>keal build app.keal -I.keal/deps/kealeb/runtime</code></pre>
+<p>That is all of it. Add <code>-lsqlite3</code> when the program imports <code>src/sql.keal</code>, and nothing otherwise: kealeb links against no library at all unless you ask for the database.</p>
+<h3 id="one-thing-about-main">One thing about <code>main</code></h3>
+<p>Keal calls a <code>main</code> by itself once the top level has run. So an entry point named <code>main</code> must <strong>not</strong> also be called:</p>
+<pre class="lang-keal"><code>proc main() {
+    site.run(8080)
+}
+                        // no `main()` here — Keal does that</code></pre>
+<p>Writing both runs the whole program twice. It is invisible while the server blocks in its loop for ever, and it appears the moment the loop can end — which is what graceful shutdown made possible, and how this was found here.</p>
+<h2 id="3-routes">3. Routes</h2>
+<p>Five verbs and a catch-all, each taking a path and a handler:</p>
+<pre class="lang-keal"><code>site.get(&quot;/health&quot;, { req -&gt; text(&quot;ok&quot;) })
+site.post(&quot;/orders&quot;, { req -&gt; jsonBody(&quot;{\&quot;id\&quot;:7}&quot;).status(201) })
+site.put(&quot;/orders/{id}&quot;, { req -&gt; text(&quot;replaced ${req.param(&quot;id&quot;)}&quot;) })
+site.patch(&quot;/orders/{id}&quot;, { req -&gt; text(&quot;changed&quot;) })
+site.delete(&quot;/orders/{id}&quot;, { req -&gt; noContent() })
+site.any(&quot;/ping&quot;, { req -&gt; text(&quot;pong&quot;) })</code></pre>
+<p>A handler is <code>(Request) -&gt; Response</code>. That is a plain function type, so a handler can be a named function, a lambda, or a value passed around:</p>
+<pre class="lang-keal"><code>func health(req: Request): Response { return text(&quot;ok&quot;) }
+
+site.get(&quot;/health&quot;, health)
+site.get(&quot;/healthz&quot;, health)</code></pre>
+<p>A named function used as a value needs Keal at <code>4b21fc5</code> or later. Before that, the native backend emitted the bare function pointer where a closure was expected and the program died — found here, fixed upstream the same day.</p>
+<h3 id="what-a-pattern-can-say">What a pattern can say</h3>
+<div class="tablewrap"><table><thead><tr><th>pattern</th><th>matches</th><th><code>req.param(...)</code></th></tr></thead><tbody><tr><td><code>/user/new</code></td><td>exactly that</td><td>—</td></tr><tr><td><code>/user/{id}</code></td><td><code>/user/42</code></td><td><code>id</code> is <code>42</code></td></tr><tr><td><code>/files/{rest...}</code></td><td><code>/files/a/b.css</code></td><td><code>rest</code> is <code>a/b.css</code></td></tr></tbody></table></div>
+<p>A trailing <code>{name...}</code> catches everything left, slashes included, and may only be last. Segments arrive percent-decoded: <code>/user/le%20monde</code> gives <code>req.param("id") == "le monde"</code>.</p>
+<p><strong>When two patterns match, the one with more literal segments wins.</strong> <code>/user/new</code> beats <code>/user/{id}</code> whichever was declared first. That is the only precedence rule, and it does not depend on the order you wrote them in.</p>
+<p>A path that matches nothing is a 404. A path that matches under a different verb is a <strong>405</strong> carrying <code>Allow:</code> — the difference matters to every client and a framework that cannot tell them apart makes them all guess.</p>
+<h2 id="4-the-request">4. The request</h2>
+<pre class="lang-keal"><code>site.post(&quot;/search&quot;, { req -&gt;
+    val q = req.queryOr(&quot;q&quot;, &quot;&quot;)                 // ?q=…
+    val page = req.queryOr(&quot;page&quot;, &quot;1&quot;).toInt() ?: 1
+    val who = req.headerOr(&quot;user-agent&quot;, &quot;?&quot;)    // case does not matter
+    val sid = req.cookie(&quot;session&quot;)              // String?
+    val form = req.form()                        // a posted form, decoded
+    val body = req.text()                        // the body as text
+    text(&quot;${q} ${page} ${who}&quot;)
+})</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>method</code> <code>path</code> <code>target</code> <code>version</code> <code>peer</code></td><td>as they arrived; <code>path</code> is decoded, <code>target</code> is not</td></tr><tr><td><code>param(name)</code></td><td>what the route captured — <code>""</code> if the route has no such hole</td></tr><tr><td><code>query</code> · <code>queryOr(name, fallback)</code></td><td>the query string, parsed</td></tr><tr><td><code>header(name): String?</code> · <code>headerOr</code> · <code>hasHeader</code></td><td>names fold case; a header sent twice is joined with <code>, </code></td></tr><tr><td><code>cookies(): Map</code> · <code>cookie(name): String?</code></td><td></td></tr><tr><td><code>text()</code> · <code>form()</code> · <code>formAll()</code> · <code>body</code></td><td>the body as text, as a form, keeping repeats, as bytes</td></tr><tr><td><code>contentType()</code></td><td>the media type, without its parameters</td></tr><tr><td><code>keepAlive()</code> · <code>isUpgrade()</code></td><td>what the connection is for</td></tr></tbody></table></div>
+<p>A <code>Request</code> cannot be changed. Keal says the contents of a parameter belong to the caller unless the signature says <code>var</code>, and a function type cannot say <code>var</code> — so a handler is given the answer rather than the chance to change the question. Where the framework needs to add something, it builds a new one: that is what <code>withParams</code> does, and it shares the body rather than copying it.</p>
+<h2 id="5-the-response">5. The response</h2>
+<pre class="lang-keal"><code>html(&quot;&lt;p&gt;hi&lt;/p&gt;&quot;)                        // text/html; charset=utf-8
+text(&quot;plain&quot;)                            // text/plain; charset=utf-8
+jsonBody(&quot;{\&quot;ok\&quot;:true}&quot;)                // application/json
+bytes(&quot;image/png&quot;, someBuf)              // anything, from a byte buffer
+noContent()                              // 204
+redirect(&quot;/next&quot;)                        // 302; redirect(&quot;/x&quot;, 301) for a move
+notFound(&quot;no such order&quot;)                // 404
+badRequest(&quot;id must be a number&quot;)        // 400
+serverError()                            // 500</code></pre>
+<p>Each answers a <code>Response</code>, and each adjustment answers the response again, so a line reads as one thing:</p>
+<pre class="lang-keal"><code>html(page).status(201).type(&quot;text/html&quot;).with(&quot;x-made-by&quot;, &quot;kealeb&quot;).cookie(&quot;sid&quot;, token, 3600)</code></pre>
+<p>Keep a chain on <strong>one line</strong>. Keal ends a statement at a newline when the previous token could end one, so a <code>.</code> at the start of the next line is a new statement, not a continuation.</p>
+<p><code>cookie(name, value, maxAge, path, httpOnly, sameSite)</code> defaults to <code>HttpOnly</code>, <code>SameSite=Lax</code>, path <code>/</code>, and no <code>Max-Age</code> at all — which means <em>this browser session</em>. <code>maxAge = 0</code> deletes.</p>
+<p><code>Content-Length</code> is always written from the body's byte count and cannot be overridden. A length that disagrees with its body breaks the <em>next</em> request rather than this one, which is a bug worth refusing the chance to write.</p>
+<h2 id="6-pages">6. Pages</h2>
+<p>A page is a function from a request to a tree of components. The framework wraps it in a document and sends it.</p>
+<pre class="lang-keal"><code>site.page(&quot;/about&quot;, { req -&gt; column([
+    h1(&quot;About&quot;),
+    p(&quot;Two paragraphs and a link.&quot;),
+    link(&quot;/&quot;, &quot;home&quot;)
+])}, &quot;About us&quot;)</code></pre>
+<p>The last argument is the <code>&lt;title&gt;</code>; without it the application's own title is used.</p>
+<h3 id="the-tree">The tree</h3>
+<p>Every builder answers a <code>Node</code>, and every adjustment answers it again.</p>
+<pre class="lang-keal"><code>el(&quot;section&quot;).cls(&quot;hero&quot;).id(&quot;top&quot;).attr(&quot;role&quot;, &quot;banner&quot;).add(h1(&quot;Title&quot;))</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>el(tag)</code> · <code>elt(tag, kids)</code></td><td>any element</td></tr><tr><td><code>txt(s)</code></td><td>text — <strong>always escaped</strong></td></tr><tr><td><code>raw(s)</code></td><td>markup that is already markup, and must be exactly one element</td></tr><tr><td><code>nothing()</code></td><td>a node that takes up a place and shows nothing</td></tr><tr><td><code>div</code> <code>span</code> <code>p</code> <code>h1</code> <code>h2</code> <code>h3</code> <code>strong</code> <code>em</code> <code>code</code> <code>pre</code> <code>br</code> <code>hr</code></td><td></td></tr><tr><td><code>link(href, s)</code> · <code>img(src, alt)</code></td><td></td></tr><tr><td><code>ul</code> <code>ol</code> <code>li</code> · <code>table</code> <code>thead</code> <code>tbody</code> <code>tr</code> <code>th</code> <code>td</code> <code>tdt</code></td><td></td></tr><tr><td><code>section</code> <code>header</code> <code>footer</code> <code>nav</code> <code>main</code></td><td></td></tr><tr><td><code>form</code> <code>label</code> <code>option</code></td><td></td></tr><tr><td><code>.cls(names)</code> <code>.id(v)</code> <code>.style(v)</code> <code>.title(v)</code> <code>.attr(n, v)</code> <code>.flag(n, yes)</code></td><td></td></tr><tr><td><code>.add(child)</code> <code>.addAll(children)</code> <code>.on(event, handler)</code> <code>.keyed(k)</code></td><td></td></tr></tbody></table></div>
+<p><code>.flag(name, yes)</code> is for the boolean attributes: it writes <code>disabled</code> when <code>yes</code> and leaves it out otherwise, because <code>disabled="false"</code> is still disabled.</p>
+<h3 id="the-widgets">The widgets</h3>
+<p><code>row</code>, <code>column</code> and <code>card</code> are layout; the rest take handlers and only mean something on a live page.</p>
+<pre class="lang-keal"><code>row([button(&quot;Save&quot;, { e -&gt; save() }), button(&quot;Cancel&quot;, { e -&gt; back() })])
+column([field(name, { e -&gt; name = e.value }), checkbox(on, { e -&gt; on = e.checked() })])
+select(chosen, [(&quot;a&quot;, &quot;Alpha&quot;), (&quot;b&quot;, &quot;Beta&quot;)], { e -&gt; chosen = e.value })
+textarea(body, { e -&gt; body = e.value })
+shownWhen(count &gt; 0, p(&quot;${count} waiting&quot;))</code></pre>
+<p><code>submit(text)</code> is the other kind: a button that submits its form the ordinary way, for a page that works with no JavaScript at all.</p>
+<h3 id="styles-written-in-keal">Styles written in Keal</h3>
+<p><code>.style("color: red")</code> takes a string and always will — for one declaration on one node that is the shortest honest thing. For a stylesheet, <code>css.keal</code> builds one out of values:</p>
+<pre class="lang-keal"><code>val href = site.css(sheet([
+    vars(&quot;:root&quot;, [(&quot;--accent&quot;, &quot;#2f6feb&quot;)]),
+    rule(&quot;.hero&quot;).bg(&quot;var(--accent)&quot;).fg(&quot;white&quot;).pad(&quot;3rem 2rem&quot;).radius(&quot;12px&quot;),
+    rule(&quot;.hero h1&quot;).size(&quot;2.4rem&quot;).weight(&quot;700&quot;),
+    media(&quot;(max-width: 600px)&quot;, [rule(&quot;.hero&quot;).pad(&quot;1.5rem&quot;)])
+]))</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>rule(selector)</code></td><td>a rule; every setter answers it, so chain or don't</td></tr><tr><td><code>.set(property, value)</code></td><td>the one that always works</td></tr><tr><td><code>.fg</code> <code>.bg</code> <code>.pad</code> <code>.margin</code> <code>.border</code> <code>.radius</code> <code>.font</code> <code>.size</code> <code>.weight</code> <code>.width</code> <code>.height</code> <code>.gap</code> <code>.display</code> <code>.flex</code> <code>.grid</code> <code>.shadow</code> <code>.opacity</code> <code>.cursor</code> <code>.position</code> <code>.overflow</code> <code>.transition</code></td><td>the ones worth a name</td></tr><tr><td><code>media(query, rules)</code> · <code>supports(query, rules)</code></td><td>at-rules; the query is the selector</td></tr><tr><td><code>vars(selector, pairs)</code></td><td>custom properties, as one rule</td></tr><tr><td><code>sheet(rules)</code></td><td>all of it, as text</td></tr></tbody></table></div>
+<p>It is not a CSS parser and does not validate: what you write goes out. What it buys is that <strong>a rule is a value</strong> — held in a list, returned from a function, built from a loop — and that the selectors and the numbers come from the same place as the rest of the program.</p>
+<p><code>site.css(text)</code> serves it and links it from every page. The URL names the content — <code>/kealeb/asset-2b7c19f4e1.css</code> — so it is sent with a one-year <code>immutable</code> cache and still changes the instant the stylesheet does. It answers that URL, for a page that wants to reference it itself.</p>
+<h3 id="javascript-and-when-you-need-it">JavaScript, and when you need it</h3>
+<pre class="lang-keal"><code>site.script(&quot;/* a map widget, a chart, an analytics tag */&quot;)
+site.linkStyle(&quot;https://fonts.example/thing.css&quot;)
+site.inHead(&quot;&lt;link rel=\&quot;icon\&quot; href=\&quot;/favicon.svg\&quot;&gt;&quot;)</code></pre>
+<p><code>script</code> is served and cached the same way, with <code>defer</code>. The framework's whole point is that you do not need it — the events and the rendering are Keal, on the server. It is here for the things that are genuinely the browser's. If you find yourself writing application logic in there, the framework has failed at something and it is worth saying which.</p>
+<p><strong>Order does not matter.</strong> The title, the stylesheet and the assets are fixed when the server is built, which is after every registration, so a page registered before <code>site.css(...)</code> still gets the stylesheet. That was a real bug and this is the sentence that says it is not one any more.</p>
+<h3 id="escaping">Escaping</h3>
+<p><code>txt</code> escapes. There is no flag to turn that off — <code>raw</code> is a different function with a different name, and that is the whole safety story. Attribute values are escaped for quotes as well.</p>
+<h3 id="the-stylesheet">The stylesheet</h3>
+<p>Every page links <code>/kealeb/kealeb.css</code>: about a hundred lines, every rule prefixed <code>kb-</code>, following the operating system's dark mode. To bring your own:</p>
+<pre class="lang-keal"><code>site.style = &quot;/static/app.css&quot;     // yours instead
+site.style = &quot;&quot;                    // none at all
+site.head = &quot;&lt;link rel=\&quot;icon\&quot; href=\&quot;/favicon.svg\&quot;&gt;&quot;</code></pre>
+<h2 id="7-forms-without-javascript">7. Forms without JavaScript</h2>
+<pre class="lang-keal"><code>site.page(&quot;/greet&quot;, { req -&gt; column([
+    h1(&quot;Greet&quot;),
+    el(&quot;form&quot;).attr(&quot;method&quot;, &quot;post&quot;).add(row([
+        el(&quot;input&quot;).cls(&quot;kb-input&quot;).attr(&quot;name&quot;, &quot;name&quot;),
+        submit(&quot;Say hello&quot;)
+    ]))
+])})
+
+site.post(&quot;/greet&quot;, { req -&gt;
+    val name = req.form().get(&quot;name&quot;) ?: &quot;&quot;
+    html(doc(&quot;Greet&quot;, h1(&quot;Hello, ${name}&quot;)))
+})</code></pre>
+<p>Nothing here needs a socket, a session or a script. It is the whole of <a href="examples.html#hello"><code>examples/hello.keal</code></a>'s third route.</p>
+<h3 id="files">Files</h3>
+<p>A form that carries a file posts <code>multipart/form-data</code>, which is bytes and not text — a PNG through a UTF-8 validator is a corrupted PNG. So it is parsed on the bytes, and a <code>Part</code> hands you either.</p>
+<pre class="lang-keal"><code>site.post(&quot;/upload&quot;, { req -&gt;
+    val doc = req.file(&quot;doc&quot;)
+    if (doc == null) {
+        badRequest(&quot;choose a file&quot;)
+    } else {
+        doc.saveTo(&quot;uploads/${epochS()}-${doc.safeName()}&quot;)
+        redirect(&quot;/&quot;, 303)
+    }
+})</code></pre>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>req.isMultipart()</code></td><td>is this that kind of body?</td></tr><tr><td><code>req.parts()</code></td><td>every part, in order</td></tr><tr><td><code>req.part(name)</code></td><td>one part, or null</td></tr><tr><td><code>req.file(name)</code></td><td>one part, but <strong>only</strong> when a file was actually chosen</td></tr><tr><td><code>p.name</code> <code>p.filename</code> <code>p.kind</code></td><td>the field name, the client's file name, the claimed media type</td></tr><tr><td><code>p.text()</code> <code>p.bytes()</code> <code>p.size()</code> <code>p.isFile()</code></td><td></td></tr><tr><td><code>p.saveTo(path)</code> · <code>p.safeName(fallback)</code></td><td></td></tr></tbody></table></div>
+<p>Three things worth knowing before writing the handler:</p>
+<ul><li><strong><code>file</code> and <code>part</code> are different questions.</strong> A browser sends a part for a file input even when nobody chose a file — empty name, no content. <code>part</code> gives you that; <code>file</code> gives you <code>null</code>, which is the check every upload handler would otherwise forget.</li><li><strong><code>kind</code> is a claim.</strong> The client says what it likes. A server that trusts it is a server that serves a script as an image.</li><li><strong><code>filename</code> is never a path.</strong> It is what a stranger typed, <code>../../etc/</code> included. <code>saveTo</code> takes a path <em>you</em> chose, and there is deliberately no <code>save(intoDirectory)</code> — that function would have to decide what to do with the client's name, and every wrong answer is a directory somebody escaped. <code>safeName()</code> strips it down to letters, digits and <code>. - _</code>, and it is still a name a stranger chose: use it to show somebody what they uploaded, and generate the name you store.</li></ul>
+<p>The whole body is in memory, bounded by the server's <code>maxBody</code> (8 MB by default). There is no streaming to disk, no <code>multipart/mixed</code>, and no <code>Content-Transfer-Encoding</code> but the identity one — a browser posting a form sends none of those.</p>
+<h2 id="8-live-pages">8. Live pages</h2>
+<pre class="lang-keal"><code>site.livePage(&quot;/&quot;, { req -&gt;
+    var count = 0
+    view({ -&gt; column([
+        h1(&quot;Clicked ${count} times&quot;),
+        button(&quot;Click me&quot;, { e -&gt; count = count + 1 })
+    ]) })
+})</code></pre>
+<p>Two functions, and the difference between them is the whole model:</p>
+<ul><li><strong>The outer one runs once per visitor.</strong> Whatever it closes over is that visitor's own state. There is no session map to key correctly — the closure <em>is</em> the session.</li><li><strong>The inner one runs after every event.</strong> It must be a function of the state and nothing else: anything it reads that can change without an event will not be noticed until the next one.</li></ul>
+<h3 id="what-happens">What happens</h3>
+<ol><li>The browser asks for the page. The server builds the tree, numbers the nodes that listen, sends the HTML, and keeps the tree.</li><li>A small script opens a WebSocket back to <code>/kealeb/live</code>.</li><li>You click. The script sends <code>{"i":"0.2.1","e":"click","v":"","f":{}}</code> — which node, which event, what it held.</li><li>The server runs the handler, builds the tree again, compares it with the one it kept, and sends the difference.</li><li>The script applies it. Six operations exist and no seventh: set a text node's text, set an attribute, remove an attribute, replace a node, insert a child, remove a child.</li></ol>
+<p>A handler is <code>(Ev) -&gt; Unit</code>:</p>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>e.name</code></td><td><code>click</code>, <code>input</code>, <code>change</code>, <code>submit</code>, <code>keydown</code></td></tr><tr><td><code>e.value</code></td><td>what the element held — the field's text, <code>"true"</code>/<code>"false"</code> for a checkbox, the chosen option</td></tr><tr><td><code>e.number(fallback)</code> · <code>e.checked()</code></td><td>the value, read</td></tr><tr><td><code>e.field(name)</code></td><td>a form's field on <code>submit</code>, the key on <code>keydown</code></td></tr></tbody></table></div>
+<h3 id="the-one-rule">The one rule</h3>
+<p><strong>One <code>Node</code>, one node in the browser.</strong> A node's identity is its position — <code>0.2.1</code>, counted from the mount point — so anything that renders to no bytes would shift everything after it. That is why <code>nothing()</code> exists and renders an empty comment, and why <code>raw</code> must contain exactly one element.</p>
+<h3 id="identity-and-when-to-say-what-a-node-is">Identity, and when to say what a node is</h3>
+<p>Without a key, <strong>identity is position</strong>. The node at <code>0.2.1</code> is compared with whatever was at <code>0.2.1</code> last time, and if the tags match the browser's node is kept and its attributes adjusted. That is right when it is the same thing rendered again — which is the ordinary case, sixty times out of sixty.</p>
+<p>It is wrong when two <em>different</em> things land in the same place: a list shifted up by one, a tab that changed, a row that was deleted. The node is kept, and so is everything the server does not know about it — the caret, the focus, the scroll position, a keystroke that has not been reported yet. They now belong to something else.</p>
+<p><code>.keyed(id)</code> is how a page says <em>this is a different thing</em>:</p>
+<pre class="lang-keal"><code>for (task in tasks) {
+    rows.add(row([...]).keyed(&quot;task-${task.id}&quot;))
+}</code></pre>
+<p>A node whose key changed is rebuilt rather than patched, so that state is thrown away with it. Keys are compared on the server and never reach the browser.</p>
+<p>What keys do <strong>not</strong> do yet is make a move cheap: inserting at the front of a list still rewrites everything after it, because the diff walks children by index and does not look for one that moved. Correct, and more work than it needs to be. That is the next thing to fix.</p>
+<h3 id="sessions">Sessions</h3>
+<p>A session lives as long as its socket, plus <code>ttlMs</code> (a minute by default) for a tab that went to sleep. A page whose session the server has forgotten reloads itself and gets a new one.</p>
+<pre class="lang-keal"><code>site.live.ttlMs = 300000        // five minutes
+site.live.size()                // how many pages are open
+site.live.refreshAll()          // rebuild every open page</code></pre>
+<p><code>refreshAll</code> is what to call when the world changed under all of them at once — a row was inserted by something else, a job finished.</p>
+<h3 id="what-it-costs">What it costs</h3>
+<p>The server holds a session per open page. A page that is open is memory that is used. That is Vaadin's bargain and it is the one kealeb makes; if a page must scale to a hundred thousand idle tabs, it should be a <code>page</code>, not a <code>livePage</code>.</p>
+<h2 id="9-static-files">9. Static files</h2>
+<pre class="lang-keal"><code>site.files(&quot;/static&quot;, &quot;./public&quot;)      // /static/a/b.css -&gt; ./public/a/b.css
+site.file(&quot;/favicon.svg&quot;, &quot;./public/favicon.svg&quot;)</code></pre>
+<p>Each answer carries an <code>ETag</code> built from the file's timestamp and size, and a client that sends it back gets a 304 with no body.</p>
+<p>Any path with a <code>..</code> segment, a leading <code>/</code>, a backslash, or a dotfile component is a <strong>403</strong> — refused, not normalised. Normalising a hostile path is how a directory gets escaped.</p>
+<h3 id="bodies-bigger-than-memory">Bodies bigger than memory</h3>
+<p>A request body over a megabyte is written to a file as it arrives rather than held:</p>
+<pre class="lang-keal"><code>s.spoolFrom = 4 * 1024 * 1024      // where the line is
+s.spoolDir = &quot;/var/tmp&quot;            // where the files go
+s.maxBody = 512 * 1024 * 1024      // now costs disk, not memory</code></pre>
+<p>A handler is told which it got:</p>
+<pre class="lang-keal"><code>site.post(&quot;/upload&quot;, { req -&gt;
+    if (req.spooled()) {
+        req.saveBodyTo(&quot;uploads/${epochS()}.bin&quot;)
+        redirect(&quot;/&quot;, 303)
+    } else {
+        store(req.body)
+        redirect(&quot;/&quot;, 303)
+    }
+})</code></pre>
+<p><code>text()</code>, <code>form()</code> and <code>parts()</code> read the body in memory, so a spooled body has nothing for them: it is at <code>bodyPath</code>, and it is the handler's to move, copy or read in pieces. <strong>The file is deleted when the request is done</strong>, so a handler that wants to keep it must say so before it returns — <code>saveBodyTo</code> is that.</p>
+<p>Measured, posting sixty megabytes: <strong>2.5 MB resident</strong>. It was 133 MB when the draining happened after the read loop rather than inside it — the kernel hands over as much as it has, so a body arrives faster than one turn of the loop and the read buffer grew to hold all of it. That is a bug this framework had for about ten minutes, and the number is here because "streaming" is a word and 130 MB is not.</p>
+<p>What this does not do: a <strong>multipart</strong> body over the threshold is spooled whole, and <code>parts()</code> cannot read it. A form with a large file in it therefore wants <code>spoolFrom</code> above the largest form you accept, or a handler that parses the file itself. Parsing multipart out of a file is the missing piece, and it is named here rather than discovered.</p>
+<h3 id="files-bigger-than-the-machine">Files bigger than the machine</h3>
+<p>A file under a megabyte is read into memory; above that the server opens it and sends it as the socket takes it, a quarter of a megabyte at a time.</p>
+<pre class="lang-keal"><code>streamFrom = 4 * 1024 * 1024        // where the line is</code></pre>
+<p>The line is where two things swap places. A small file wants to be in memory: it can be compressed, which is worth four or five times its size on a stylesheet, and holding it costs nothing. A large one wants the opposite — compressing a film is pointless because a film is already compressed, and holding it is the difference between serving it and refusing to.</p>
+<p>Measured, serving the same hundred-megabyte file both ways:</p>
+<div class="tablewrap"><table><thead><tr><th></th><th>resident memory</th></tr></thead><tbody><tr><td>streamed</td><td><strong>3 MB</strong></td></tr><tr><td>read whole</td><td><strong>235 MB</strong></td></tr></tbody></table></div>
+<p>The socket's appetite is what paces the read, so a slow client is a slow read and not a queue: the server never holds more of the file than the piece it is writing. A streamed body is never compressed, and both paths answer <code>Range</code>.</p>
+<h3 id="ranges">Ranges</h3>
+<p>A static file is served with <code>Accept-Ranges: bytes</code>, and a client that asks for part of one gets it:</p>
+<pre><code>Range: bytes=0-499        the first five hundred
+Range: bytes=500-         everything from there
+Range: bytes=-500         the **last** five hundred</code></pre>
+<p>The answer is a 206 with <code>Content-Range</code>. A range naming bytes the file does not have is a <strong>416</strong> carrying <code>Content-Range: bytes */size</code> — the resource is there, the slice is not, and that is a different thing from a 404.</p>
+<p>Anything this cannot honour — a unit that is not bytes, more than one range, anything malformed — means <em>send the whole thing</em>, which is always a correct answer to a range request and is what the specification allows a server to do rather than working harder.</p>
+<p>A 206 is never compressed: a range names bytes of the resource as it is, so a compressed slice would be a slice of something the client did not ask for.</p>
+<p>The honest limit: the file is read whole before the slice is cut. That is fine for the sizes a page is made of and wrong for a film, and it is the same limitation as everywhere else here — nothing streams yet.</p>
+<h2 id="10-json">10. JSON</h2>
+<pre class="lang-keal"><code>val fields: Map&lt;String, Json&gt; = {}
+fields.set(&quot;id&quot;, jInt(7))
+fields.set(&quot;name&quot;, jStr(&quot;Ada&quot;))
+fields.set(&quot;tags&quot;, jStrs([&quot;a&quot;, &quot;b&quot;]))
+jsonBody(jObj(fields).write())</code></pre>
+<p>Reading:</p>
+<pre class="lang-keal"><code>site.post(&quot;/orders&quot;, { req -&gt;
+    val body = parseJson(req.text())
+    if (body == null) { badRequest(&quot;not JSON&quot;) } else {
+        text(&quot;id ${body.intAt(&quot;id&quot;)} for ${body.str(&quot;name&quot;)}&quot;)
+    }
+})</code></pre>
+<p><code>parseJson</code> answers <code>Json?</code>. Trailing text is a refusal, not something to ignore. <code>field(name)</code> answers <code>Json?</code>, which is a different thing from a field whose value is JSON <code>null</code> — and the difference is why it is nullable.</p>
+<h2 id="11-testing">11. Testing</h2>
+<p>A handler is a function, so most of a site can be tested with no socket at all:</p>
+<pre class="lang-keal"><code>val r = Router()
+r.get(&quot;/user/{id}&quot;, { req -&gt; text(&quot;user ${req.param(&quot;id&quot;)}&quot;) })
+
+assert(dispatch(r, request(&quot;GET&quot;, &quot;/user/42&quot;)).text() == &quot;user 42&quot;, &quot;the parameter&quot;)
+assert(dispatch(r, request(&quot;GET&quot;, &quot;/nope&quot;)).code == 404, &quot;and nothing else&quot;)</code></pre>
+<p><code>request(method, target)</code> builds one by hand. <code>dispatch(router, req)</code> runs it through the table.</p>
+<p>When you do want the socket, ask for port 0 and the machine picks one:</p>
+<pre class="lang-keal"><code>val s = site.serverOn(0)
+val port = s.open()          // the port it actually got
+s.tick(50)                   // one turn of the loop</code></pre>
+<p><code>tools/test.sh</code> runs <a href="https://github.com/geneacta/kealeb/blob/main/tests/units.keal"><code>tests/units.keal</code></a> and, when <code>node</code> is present, <a href="https://github.com/geneacta/kealeb/blob/main/tests/client.mjs"><code>tests/client.mjs</code></a> — which runs the real client script against a real server.</p>
+<h3 id="testing-what-a-program-leaves-behind">Testing what a program leaves behind</h3>
+<p>Keal frees an object when its last reference goes, so a leak here is a <strong>cycle</strong> and nothing else. <code>keal build --audit</code> reports what outlived a program and says which of it was unreachable:</p>
+<pre class="lang-sh"><code>keal build --audit tests/lifetime.keal &amp;&amp; ./lifetime</code></pre>
+<p>The trap is that the verdict arrives <em>after</em> the last statement, so the program cannot assert on it — by the time there is an answer there is no program left to act on it. Something outside has to read the output; <code>tools/test.sh</code> does, and fails with the whole report when the answer is not <code>nothing outlived the program</code>. A version of that test ending in <code>assert(true, "no leaks")</code> looks like a test, runs green for ever, and checks nothing.</p>
+<p>That test asserts a negative, so it has a control: <a href="https://github.com/geneacta/kealeb/blob/main/tests/leaks.keal"><code>tests/leaks.keal</code></a> builds the cycle on purpose and the runner requires the audit to still report it, and to report exactly one. A suite that only ever checks for the absence of a thing goes green the day it stops being able to find it.</p>
+<p>The rule is one line and it is not about handlers, or about kealeb: <strong>a closure stored in an object must not hold that object.</strong> Reference counting frees what nothing points at, and a ring points at itself.</p>
+<p>In this framework the ring goes through the router — it keeps the handler, and the application keeps it — so the shape to avoid is a handler that reaches back to the application:</p>
+<pre class="lang-keal"><code>val site = app(&quot;mine&quot;)
+
+site.get(&quot;/a&quot;, { req -&gt; text(site.title) })       // holds the application
+val name = site.title
+site.get(&quot;/b&quot;, { req -&gt; text(name) })             // holds a string</code></pre>
+<p>Inside a method of your own class it is the same thing spelt <code>this</code>. Either way the fix is the same: read what the closure needs into a local <em>before</em> the lambda, and the closure holds the value instead of the object that had it.</p>
+<p>In an ordinary program this costs nothing, and it is worth saying so plainly rather than raising an alarm: <code>val site = app(...)</code> at the top level lives until the process ends, so a ring inside it is never collected because nothing was ever going to collect it. It matters when an application is built and dropped — a test, or a program that serves more than one. That is exactly what <code>tests/lifetime.keal</code> does, and why its handlers never mention <code>site</code>.</p>
+<p><code>weak</code> is not the answer here. It would say the application is only weakly held by its own routes, which is not what the program means.</p>
+<h2 id="12-filters">12. Filters</h2>
+<p>A filter wraps every request. It is an ordinary function, and there is no registry, no ordering annotation and no chain configuration — the order is the order you wrote them in.</p>
+<pre class="lang-keal"><code>site.use({ req, next -&gt;
+    val started = monoMs()
+    val res = next.on(req)
+    println(&quot;${req.method} ${req.path} ${res.code} ${monoMs() - started}ms&quot;)
+    res
+})</code></pre>
+<p>They run <strong>outermost first</strong> and unwind in the other direction, so the first one added is the last one to see the answer. A filter that never calls <code>next.on(req)</code> has answered by itself, which is what refusing looks like:</p>
+<pre class="lang-keal"><code>site.use({ req, next -&gt;
+    if (req.path.startsWith(&quot;/admin&quot;) and (not a.signedIn(req))) {
+        redirect(&quot;/sign-in&quot;, 303)
+    } else {
+        next.on(req)
+    }
+})</code></pre>
+<p>Filters sit <strong>inside</strong> what <code>secure</code> installs and <strong>outside</strong> the router: a filter never sees a request that failed its CSRF check, and everything a filter answers still gets the response headers.</p>
+<p>A filter is held by the application, so the rule that holds everywhere else holds here — a filter must not capture the application. Read what it needs into a local first.</p>
+<p>When one function is enough, <code>Server.handle</code> is still there and replacing it replaces everything, routing included.</p>
+<h2 id="13-running-it">13. Running it</h2>
+<pre class="lang-keal"><code>site.run(8080)                        // 127.0.0.1 — cannot surprise anybody
+site.run(8080, &quot;&quot;)                    // every interface
+site.log = false                      // no line per request</code></pre>
+<p>The server it builds can be adjusted before it starts:</p>
+<pre class="lang-keal"><code>val s = site.serverOn(8080)
+s.maxHead = 16 * 1024                 // bigger heads are 431
+s.maxBody = 2 * 1024 * 1024           // bigger bodies are 413
+s.idleMs = 15000                      // a quiet connection is closed
+s.maxRequests = 500                   // per connection, then close
+s.handle = { req -&gt; myOwnDispatch(req) }
+s.run()</code></pre>
+<p>There is no TLS. Put it behind a reverse proxy, which is where a terminator belongs; <code>X-Forwarded-For</code> arrives as an ordinary header and <code>req.peer</code> is the proxy.</p>
+<p>Standard output is line-buffered from the moment the server starts, so a log piped to a file or a supervisor arrives as it is written.</p>
+<h3 id="compression">Compression</h3>
+<p>Every response a browser can read gzipped, is:</p>
+<pre class="lang-keal"><code>s.compress = false        // if you would rather it were not
+s.compressFrom = 2048     // the size below which it is not worth the header</code></pre>
+<p>It is on by default and there is not much to it: if the client said <code>Accept-Encoding: gzip</code>, the media type is text or something that is text underneath, the body is at least <code>compressFrom</code> bytes, and compressing actually made it smaller — then it goes out compressed. Any of those failing, it goes out as it was.</p>
+<p><code>Vary: Accept-Encoding</code> is set <strong>whether or not</strong> it compressed, and that is the part everybody forgets: a cache that stored the compressed answer without it would hand it to the next client along, who may not be able to read it.</p>
+<p>Measured on this machine: a 9 KB page becomes 717 bytes in about a millisecond; 180 KB takes four. Something already compressed — a PNG, a font — is never touched, because its media type is not on the short list of things worth compressing and DEFLATE would spend those milliseconds making it very slightly bigger.</p>
+<p>The compressor is <code>src/gzip.keal</code>, written in Keal. Each block goes out with whichever code table is smaller — the fixed one the specification writes down, or one built from what that block actually contains and written into the output ahead of it. Choosing costs one loop over the frequencies and is worth about a fifth on HTML; a block whose alphabet is nearly uniform, a fragment of an image or a base64 blob, comes out smaller with the fixed table, which is why it is asked rather than assumed.</p>
+<p>Measured against the reference implementation on the eight files the suite compresses, <code>gzip -6</code> and this one produce <strong>the same size on six of them, one byte less on two, and eight bytes more on one</strong> — a 13 KB file, which is three parts in a thousand. There is no reason to reach for anything else.</p>
+<p>There is no decompressor. kealeb compresses and never inflates, which is also why nothing in Keal can check the output: <code>tools/test.sh</code> hands every file it produces to the system <code>gzip</code> <strong>and</strong> to Python, and requires both to give the bytes back. A test that only checked the output was smaller would go green the day the compressor started emitting plausible nonsense.</p>
+<h3 id="stopping">Stopping</h3>
+<p><code>SIGINT</code> and <code>SIGTERM</code> — Ctrl-C, and what a service manager sends — do not kill the process any more. They ask it to stop, and it does so in this order:</p>
+<ol><li><code>onStop</code> runs, if you set one.</li><li>The listener closes, so a client that connects now is refused by the kernel and can go somewhere else.</li><li>Connections in the middle of an answer are given up to <code>drainMs</code> (five seconds) to finish. Connections that owe nothing are closed at once — waiting for an idle keep-alive would mean waiting the whole timeout every time.</li><li>Anything still open after that is closed anyway, with a line saying so. A shutdown that waits for ever is a process somebody has to kill, and being killed is what this exists to avoid.</li></ol>
+<pre class="lang-keal"><code>val s = site.serverOn(8080)
+s.onStop = { -&gt; println(&quot;goodbye&quot;) }
+s.drainMs = 15000
+s.run()</code></pre>
+<p>A handler cannot be interrupted, so a request already running always finishes: the signal sets a flag and the loop notices, which is also the only thing that is safe to do inside a signal handler.</p>
+<h3 id="when-there-is-nothing-there-and-when-something-broke">When there is nothing there, and when something broke</h3>
+<pre class="lang-keal"><code>site.onNotFound({ req -&gt; column([h1(&quot;Nothing at ${req.path}&quot;), link(&quot;/&quot;, &quot;home&quot;)]) })
+site.onError({ req -&gt; column([h1(&quot;Something went wrong&quot;), p(&quot;It has been written down.&quot;)]) })</code></pre>
+<p>Both build a page like any other page — the document, the stylesheet, the site's own shape — and both replace the answer <strong>only when the client asked for HTML</strong>. An API's 404 stays the short sentence a program can read, because error handling that has to parse HTML is error handling nobody writes.</p>
+<p><code>onError</code> is not told what was thrown, on purpose. Whatever a handler threw may hold a query, a path or a password — anything it was holding when it gave up — so it goes to standard output, where somebody who can read the log can read it, and a log is not a thing a stranger can read.</p>
+<p>The catch that turns a throw into a 500 sits <strong>inside</strong> the filters, around the router. That is not a detail: a handler that throws unwinds every filter around it on the way out, so a catch further out would produce a 500 that no filter ever sees — <code>onError</code> could not replace it, and a logging filter would miss the one request most worth recording.</p>
+<h2 id="14-scheduled-work">14. Scheduled work</h2>
+<pre class="lang-keal"><code>site.every(60000, { -&gt; sweepExpiredCarts() })      // every minute
+site.after(5000, { -&gt; warmTheCache() })            // once, five seconds in</code></pre>
+<p>A job runs on the loop's own thread, <strong>between requests and never during one</strong>, so it reads and writes whatever a handler reads and writes with nothing to synchronise — no lock, no queue, no copy. That is the same bargain the rest of the framework makes, and it has the same price: a job that blocks blocks the server.</p>
+<p>A job that takes longer than its interval simply runs less often than it asked. It is never started twice, and there is no queue of missed runs waiting to stampede when it finishes.</p>
+<p>A job that throws is reported on standard output and <strong>keeps its schedule</strong> — a batch that fails once an hour should still be tried next hour, and a server that dies because a scheduled job did is worse than the job failing.</p>
+<p>From a server you already hold, <code>every</code> and <code>after</code> answer the <code>Timer</code>, which can be <code>cancel()</code>led or told to run <code>soon()</code>:</p>
+<pre class="lang-keal"><code>val s = site.serverOn(8080)
+val beat = s.every(30000, { -&gt; ping() })
+beat.soon()                                        // run it on the next turn
+beat.cancel()                                      // and never again</code></pre>
+<p>The cost is a comparison per turn of the loop and nothing else: the loop was already sleeping in <code>poll</code> with a deadline, and a timer is that deadline being chosen rather than assumed. A server with no jobs sleeps exactly as it did before.</p>
+<p>The rule about what a job may capture is the handler's rule: <strong>a job must not hold the application.</strong> <code>site.every(1000, { -&gt; println(site.title) })</code> closes the ring that <code>tests/lifetime.keal</code> exists to keep open.</p>
+<p>There is no cron expression and no calendar. <code>every</code> counts milliseconds. A job that must run at 03:00 should check the clock itself — <code>utcNow()</code> is in the prelude — because a scheduler that understands time zones and daylight saving is a different program from this one, and pretending otherwise is how a batch runs twice in October.</p>
+<h2 id="15-a-database">15. A database</h2>
+<p>SQLite, and it is a <strong>second import and a second link flag</strong> — a program that never opens a database must not link against one:</p>
+<pre class="lang-keal"><code>import &quot;kealeb/kealeb.keal&quot;
+import &quot;kealeb/src/sql.keal&quot;</code></pre>
+<pre class="lang-sh"><code>tools/build.sh app.keal -lsqlite3</code></pre>
+<pre class="lang-keal"><code>val db = openDb(&quot;notes.db&quot;)          // &quot;:memory:&quot; for a test
+if (db == null) { println(&quot;could not open it&quot;); exit(1) }
+
+db.migrate([
+    &quot;create table note(id integer primary key, body text not null, done integer not null default 0)&quot;,
+    &quot;alter table note add column made integer not null default 0&quot;
+])
+
+db.run(&quot;insert into note(body) values (?)&quot;, [vText(what)])
+for (r in db.query(&quot;select id, body, done from note order by id&quot;, [])) {
+    println(&quot;${r.int(&quot;id&quot;)} ${r.text(&quot;body&quot;)} ${r.bool(&quot;done&quot;)}&quot;)
+}</code></pre>
+<h3 id="the-one-rule">The one rule</h3>
+<p><strong>Everything a request can reach goes in as a bound value</strong> — <code>?</code> in the SQL, a <code>Val</code> in the list. There is no function here that builds SQL out of a string somebody sent you, because there is no safe version of that to offer.</p>
+<p><code>script()</code> is the only function that takes SQL with no parameters. It is for the schema you wrote, it runs several statements at once, and it is spelt differently from <code>run</code> on purpose. Never hand it anything a request touched.</p>
+<p>Two more refusals fall out of that, and both are the shape a half-finished edit takes:</p>
+<ul><li><code>run</code> and <code>query</code> take <strong>one</strong> statement. <code>"select 1; drop table note"</code> is refused with those words, not run and not silently truncated.</li><li>The number of values must match the number of <code>?</code>. A mismatch is refused naming both counts, rather than becoming a null in a column three weeks later.</li></ul>
+<h3 id="reading">Reading</h3>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>db.run(sql, params)</code></td><td>rows changed, or -1</td></tr><tr><td><code>db.query(sql, params)</code></td><td>every row, as a list</td></tr><tr><td><code>db.one(sql, params)</code></td><td>the first <code>Row?</code>, or null</td></tr><tr><td><code>db.value(sql, params)</code></td><td>the first column of the first row, as a <code>Val</code></td></tr><tr><td><code>db.script(sql)</code></td><td>statements with no parameters — your schema</td></tr><tr><td><code>db.changed()</code> · <code>db.lastId()</code> · <code>db.error()</code></td><td></td></tr></tbody></table></div>
+<p>A <code>Row</code> is read by name — <code>r.int("id")</code>, <code>r.text("body")</code>, <code>r.float("score")</code>, <code>r.bool("done")</code>, <code>r.isNull("x")</code> — and a name no column has answers null rather than failing, because a query and its reader drift apart in the same commit often enough that a crash there helps nobody.</p>
+<p>The values convert the way SQLite itself converts: asking a number for its text gives you the digits. <code>isNull</code> is separate from every fallback, because <em>absent</em> and <em>zero</em> are not the same answer.</p>
+<p>Building: <code>vInt</code> <code>vFloat</code> <code>vText</code> <code>vBool</code> <code>vNull</code>. SQLite has no boolean, so <code>vBool</code> is an integer that says which.</p>
+<h3 id="transactions">Transactions</h3>
+<pre class="lang-keal"><code>db.transaction({ -&gt;
+    db.run(&quot;update account set balance = balance - ? where id = ?&quot;, [vInt(n), vInt(from)])
+    db.run(&quot;update account set balance = balance + ? where id = ?&quot;, [vInt(n), vInt(to)])
+    true                                  // false rolls back
+})</code></pre>
+<p>It commits when the block answers true, rolls back when it answers false, and rolls back <strong>and re-throws</strong> when it throws — because a transaction left open by an exception is what locks a database for everybody else.</p>
+<h3 id="migrations">Migrations</h3>
+<p><code>migrate(steps)</code> is every migration the program has ever had, in order and never reordered. Step 1 is <code>steps[0]</code>; a database at version 2 runs from <code>steps[2]</code> onward. SQLite keeps the number in the file, so there is no table to create and nothing to keep in sync.</p>
+<p>Each step runs <strong>in a transaction with its own version bump</strong>, so a step that fails leaves the database exactly where it was. It answers the version it reached, or -1 with the reason in <code>error()</code>.</p>
+<h3 id="what-it-is-not">What it is not</h3>
+<p>There is no object-relational mapper, and there is not going to be one by accident. A <code>Row</code> is a <code>Row</code> rather than your record because turning one into the other is three lines you can read, and a mapper that does it for you is a second language to learn before the first query.</p>
+<p>The honest limits, each of which is a real one:</p>
+<ul><li><strong>One connection.</strong> The server is one thread; a second connection would spend its life waiting on the first. <code>Db</code> closes itself when its last reference goes, so there is no pool to configure and nothing to remember.</li><li><strong><code>query</code> reads every row into memory</strong>, in one go. A query that could answer a million rows should say <code>limit</code>. That is stated rather than hidden behind a cursor that looks lazy and is not.</li><li><strong>No blobs.</strong> A <code>BLOB</code> column read through <code>text()</code> comes back with anything that is not well-formed UTF-8 turned into U+FFFD, which is the same treatment bytes off a socket get. Read <code>kind</code> first if the column might not be text.</li><li><strong>SQLite only.</strong> Postgres would be <code>libpq</code> through the same C door, or its wire protocol written in Keal — a project of its own either way.</li></ul>
+<p><a href="examples.html#notes"><code>examples/notes.keal</code></a> is a live page whose state is a database: stop it, start it again, the notes are there. It also shows the one thing a live page cannot work out for itself — <code>site.live.refreshAll()</code> in a timer, so a page learns about a change it did not cause.</p>
+<h2 id="16-security">16. Security</h2>
+<p>Four ideas, and there is no fifth. A <strong>password</strong> you can store, a <strong>session</strong> that is a signed cookie and nothing on the server, a <strong>guard</strong> that is an ordinary function wrapping a handler, and a <strong>token</strong> that makes a form only work when it came from your own page.</p>
+<p>There is no role hierarchy, no expression language, no filter chain and no annotations. A role is a string. A rule is a function.</p>
+<pre class="lang-keal"><code>import &quot;kealeb/src/auth.keal&quot;
+
+val a = auth(secretFromFile(&quot;app.secret&quot;))
+site.secure(a)</code></pre>
+<p>Those two lines switch on four things nobody should have to write:</p>
+<ul><li>every form on every page gets a hidden CSRF token, put there by the framework walking the tree;</li><li>every <code>POST</code>, <code>PUT</code>, <code>PATCH</code> and <code>DELETE</code> is refused without it;</li><li>every response carries <code>nosniff</code>, <code>Referrer-Policy</code>, <code>X-Frame-Options</code> and a content policy of <code>default-src 'self'</code> with no room for inline script;</li><li>a WebSocket upgrade whose <code>Origin</code> is another site is refused.</li></ul>
+<p>There is nothing to configure because there is nothing there anybody should want to turn off. What is left to decide is what an application really has to: who may sign in, and what they may then do.</p>
+<h3 id="the-secret">The secret</h3>
+<p>Everything is a signature under one key, so a program that hard-codes it in a public repository has no security at all, and one that generates a new key at every start signs everybody out on every deploy.</p>
+<pre class="lang-keal"><code>val a = auth(secretFromFile(&quot;app.secret&quot;))</code></pre>
+<p>Thirty-two random bytes, made on the first run, read on every one after. <strong>Keep that file out of version control and back it up</strong>: it signs every session and peppers every password, so losing it signs everybody out <em>and</em> makes every stored hash unverifiable.</p>
+<h3 id="passwords">Passwords</h3>
+<pre class="lang-keal"><code>val stored = a.hashPassword(what)                 // pbkdf2-sha256$25000$…$…
+if (a.checkPassword(what, stored)) { … }
+if (a.needsRehash(stored)) { store(a.hashPassword(what)) }</code></pre>
+<p>PBKDF2-HMAC-SHA256, written in Keal in <code>src/hash.keal</code> and checked against the published vectors on every build. A fresh sixteen-byte salt per password, and the round count stored alongside — so raising it later does not invalidate anything, and <code>needsRehash</code> says when to write one again at the new count.</p>
+<p><strong>Why 25 000 rounds and not the 600 000 OWASP asks for</strong>, since the difference matters and hiding it would be worse than having it: this server is one thread, so hashing blocks every other request for as long as it takes. 25 000 costs about 95 ms here — measured, not guessed. At OWASP's number a login would hold the loop for two and a half seconds and ten of them would be a denial of service anybody could mount.</p>
+<p>Three things carry the weight that the round count does not:</p>
+<ul><li><strong>A pepper.</strong> Every password is hashed with a secret that is not in the database. A stolen database is not something you can guess against, whatever the round count, unless the secret leaked too.</li><li><strong>A rate limit.</strong> <code>a.mayTry(key)</code> allows ten attempts a minute per key. Call it with the account name <em>and</em> the peer, so one account cannot be locked out from elsewhere and one machine cannot work through a list of names.</li><li><strong>Saying so.</strong> If your server has time to spare, <code>a.rounds = 100000</code> is one line, and it costs what <code>tools/build.sh</code> will tell you it costs.</li></ul>
+<h3 id="sessions">Sessions</h3>
+<pre class="lang-keal"><code>a.signIn(redirect(&quot;/&quot;, 303), name)      // sets the cookie
+a.signOut(redirect(&quot;/&quot;, 303))           // deletes it
+a.userOf(req)                           // String?, or null
+a.signedIn(req)                         // Bool</code></pre>
+<p>The whole session is the cookie: a name and the second it was issued, signed. <code>HttpOnly</code>, <code>SameSite=Lax</code>, and <code>Secure</code> unless you turn it off for localhost.</p>
+<p>There is no table, so nothing expires on the server and nothing grows — and signing out deletes a cookie, which means a stolen cookie stays good until it expires. That is the trade a stateless session makes, stated rather than buried, and <code>a.ttl</code> is the dial on it (a week by default; 0 means until the browser closes).</p>
+<h3 id="guards">Guards</h3>
+<pre class="lang-keal"><code>site.get(&quot;/private&quot;, requireUser(a, { req -&gt; … }))
+site.get(&quot;/admin&quot;, requireWhen(a, { who -&gt; isAdmin(db, who) }, { req -&gt; … }))</code></pre>
+<p><code>requireUser</code> sends a stranger to <code>a.signInPath</code> with <code>?next=</code> naming where they were going, or answers 401 when <code>signInPath</code> is empty — which is what an API wants and a browser does not. <code>requireWhen</code> is given the user's name and answers whether they may; somebody signed in but not allowed gets <strong>403</strong>, not 404.</p>
+<p>Reading <code>?next=</code> back is <code>nextAfter(req)</code>, and the checking is the point: a redirect that follows a value a stranger controls is how a phishing link borrows your domain. Anything that is not a single-slash-rooted path is refused, <code>//evil.example</code> included — that is the one people forget.</p>
+<h3 id="the-token">The token</h3>
+<p><code>site.secure(a)</code> puts a hidden field into every form built by <code>page</code> or <code>livePage</code> whose method changes something, and refuses every unsafe request without it. An API may send it as <code>X-CSRF-Token</code> instead.</p>
+<p>The token is derived from the session rather than stored, so it needs no state and cannot get out of step, and a visitor with no session still gets one — which the sign-in form needs, since it has to work before anybody is signed in.</p>
+<p>One gap to know about: a handler that builds its own document with <code>doc(...)</code> rather than through <code>page</code> is not walked, so add <code>a.csrfInput(req)</code> yourself. The pattern that avoids the question is POST-then-redirect, which you want anyway.</p>
+<h3 id="what-this-does-not-do">What this does not do</h3>
+<ul><li>No OAuth, no SAML, no LDAP, no OpenID. A password and a cookie.</li><li>No permission model. <code>requireWhen</code> hands you a name and takes a <code>Bool</code>; where roles live and what they mean is your program's business.</li><li>No TLS. Put it behind a reverse proxy — and until you do, <code>a.secure = false</code> or the cookie will not be sent at all.</li><li>No account recovery, no email confirmation, no second factor.</li><li><strong>The cryptography is hand-written.</strong> <code>src/hash.keal</code> says so at the top and says why: the alternative was linking OpenSSL, which is one more thing to install and a second answer to <em>what does this depend on</em>. Every function in it is held to the vectors whoever specified it published — NIST's for SHA-256, RFC 4231's for HMAC, RFC 7914's for PBKDF2 — on every build. That is enough to say the algorithms are the algorithms. It is not an audit, and this guide will not pretend it is one.</li></ul>
+<h2 id="17-what-the-framework-will-not-do">17. What the framework will not do</h2>
+<ul><li>It will not talk to any database but SQLite, and only when you ask for it with a second import and <code>-lsqlite3</code>.</li><li>It will not map rows onto your records for you. See §12.</li><li>It will not compress. It will not speak HTTP/2, or TLS.</li><li>It will not read a chunked request body — it answers <strong>501</strong> and says so.</li><li>It will not read <code>multipart/form-data</code>, so there are no file uploads yet.</li><li>It will not run your handler on another thread, so a handler that blocks blocks the server. Answer, and return.</li><li>It will not escape what you put in <code>raw</code>. That is what the name is for.</li></ul>
+<hr>
+<h2 id="where-things-are">Where things are</h2>
+<div class="tablewrap"><table><thead><tr><th>file</th><th>what is in it</th></tr></thead><tbody><tr><td><code>runtime/kb.h</code></td><td>the whole C surface: sockets, <code>poll</code>, blobs</td></tr><tr><td><code>src/ffi.keal</code></td><td>the only file that mentions C</td></tr><tr><td><code>src/bytes.keal</code></td><td>byte buffers, hex, Base64, SHA-1</td></tr><tr><td><code>src/text.keal</code></td><td>percent-encoding, forms, cookies, HTTP dates</td></tr><tr><td><code>src/http.keal</code></td><td><code>Request</code>, <code>Response</code>, the wire format</td></tr><tr><td><code>src/router.keal</code></td><td>patterns, matching, dispatch</td></tr><tr><td><code>src/server.keal</code></td><td>the event loop and the connection state machine</td></tr><tr><td><code>src/ui.keal</code></td><td>the component tree and the renderer</td></tr><tr><td><code>src/theme.keal</code></td><td>the stylesheet and the document</td></tr><tr><td><code>src/json.keal</code></td><td>JSON both ways</td></tr><tr><td><code>src/ws.keal</code></td><td>WebSocket framing</td></tr><tr><td><code>src/live.keal</code></td><td>sessions, the diff, and the browser client</td></tr><tr><td><code>src/css.keal</code></td><td>stylesheets, written in Keal</td></tr><tr><td><code>src/sql.keal</code></td><td>SQLite: bound values, rows, transactions, migrations</td></tr><tr><td><code>runtime/kb_sql.h</code></td><td>the C for that, and the only thing that needs a library</td></tr><tr><td><code>src/gzip.keal</code></td><td>DEFLATE and the gzip container, fixed codes only</td></tr><tr><td><code>src/upload.keal</code></td><td><code>multipart/form-data</code>, parsed on the bytes</td></tr><tr><td><code>src/hash.keal</code></td><td>SHA-256, HMAC, PBKDF2 — with the warning that goes with them</td></tr><tr><td><code>src/auth.keal</code></td><td>passwords, sessions, guards, the CSRF token</td></tr><tr><td><code>src/app.keal</code></td><td>the front door everything above is reachable from</td></tr></tbody></table></div></div><div class="dtoc"><div class="h">ON THIS PAGE</div><div class="dtoc-items"><a href="#1-a-program">1. A program</a><a href="#2-using-kealeb-from-your-own-project">2. Using kealeb from your own project</a><a href="#3-routes">3. Routes</a><a href="#4-the-request">4. The request</a><a href="#5-the-response">5. The response</a><a href="#6-pages">6. Pages</a><a href="#7-forms-without-javascript">7. Forms without JavaScript</a><a href="#8-live-pages">8. Live pages</a><a href="#9-static-files">9. Static files</a><a href="#10-json">10. JSON</a><a href="#11-testing">11. Testing</a><a href="#12-filters">12. Filters</a><a href="#13-running-it">13. Running it</a><a href="#14-scheduled-work">14. Scheduled work</a><a href="#15-a-database">15. A database</a><a href="#16-security">16. Security</a><a href="#17-what-the-framework-will-not-do">17. What the framework will not do</a><a href="#where-things-are">Where things are</a></div></div></div>
+<footer class="foot">
+  <div class="foot-l">A web framework for Keal: routes, pages, and state that stays on the server. Built by Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealeb">Source on GitHub</a>
+    <a href="https://geneacta.github.io/keal/">The Keal language</a>
+    <a href="https://github.com/geneacta/kealeb/issues">Issues</a>
+  </div>
+</footer>
+</div>
+</body>
+</html>
