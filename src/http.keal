@@ -196,6 +196,66 @@ public func withParams(req: Request, params: Map<String, String>): Request {
                    req.headers, req.body, params, req.peer)
 }
 
+// ------------------------------------------------------------------ ranges
+
+/// A stretch of bytes a client asked for, resolved against a known size.
+///
+/// `from` and `to` are both inclusive, which is what HTTP means by them and
+/// what everybody gets wrong once. `satisfiable` is false when the range names
+/// bytes the thing does not have, which is a 416 and not a 404 — the resource
+/// is there, the slice is not.
+public class Span(public val from: Int, public val to: Int, public val satisfiable: Bool) {
+    public func length(): Int { return this.satisfiable ? ((this.to - this.from) + 1) : 0 }
+}
+
+/// Read a `Range:` header against a size.
+///
+/// Answers `null` when there is no range to honour — no header, a unit that is
+/// not bytes, more than one range, or anything malformed. All of those mean
+/// *send the whole thing*, which is always a correct answer to a range request
+/// and is what the specification allows a server to do rather than working
+/// harder.
+///
+/// The three forms: `bytes=0-499` is the first five hundred, `bytes=500-` is
+/// everything from there, and `bytes=-500` is the **last** five hundred, which
+/// is the one that reads backwards and is the one people implement wrongly.
+public func parseRange(header: String, size: Int): Span? {
+    if (header.isEmpty()) { return null }
+    val cut = cutOn(header.trim(), "=")
+    if (cut == null) { return null }
+    if (cut.first.trim().toLower() != "bytes") { return null }
+    val spec = cut.second.trim()
+    if (spec.contains(",")) { return null }
+
+    val dash = spec.indexOf("-")
+    if (dash < 0) { return null }
+    val head = spec.substring(0, dash).trim()
+    val tail = spec.substring(dash + 1, spec.length).trim()
+    if (head.isEmpty() and tail.isEmpty()) { return null }
+
+    if (size <= 0) { return Span(0, 0, false) }
+
+    if (head.isEmpty()) {
+        val want = tail.toInt() ?: -1
+        if (want < 0) { return null }
+        if (want == 0) { return Span(0, 0, false) }
+        val from = want >= size ? 0 : size - want
+        return Span(from, size - 1, true)
+    }
+
+    val from = head.toInt() ?: -1
+    if (from < 0) { return null }
+    if (from >= size) { return Span(0, 0, false) }
+    var to = size - 1
+    if (not tail.isEmpty()) {
+        val asked = tail.toInt() ?: -1
+        if (asked < 0) { return null }
+        if (asked < from) { return Span(0, 0, false) }
+        if (asked < to) { to = asked }
+    }
+    return Span(from, to, true)
+}
+
 // --------------------------------------------------------------- response
 
 /// One response. Built by the helpers below and adjusted by the `with`
@@ -329,6 +389,7 @@ public func statusText(code: Int): String {
         413 -> "Payload Too Large"
         414 -> "URI Too Long"
         415 -> "Unsupported Media Type"
+        416 -> "Range Not Satisfiable"
         422 -> "Unprocessable Content"
         426 -> "Upgrade Required"
         429 -> "Too Many Requests"

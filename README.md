@@ -218,8 +218,10 @@ listener closes so a new client goes elsewhere, a request already being
 answered is finished, connections that owe nothing are closed at once, and
 whatever is left after `drainMs` is closed anyway with a line saying so.
 
-**The rest.** Static files with ETags and a 403 for any path that tries to
-climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
+**The rest.** Static files with ETags, byte ranges (a 206 with
+`Content-Range`, a 416 when the slice is not there, and never compressed
+because a range names the resource as it is), and a 403 for any path that
+tries to climb. JSON both ways, surrogate pairs included. WebSocket framing, RFC 6455,
 no extensions. Cookies. Forms, including repeated fields.
 
 ## Using it from your own project
@@ -272,7 +274,7 @@ tools/test.sh
 
 `units` holds the buffers, the encodings, the request parser, the router, the
 renderer, the diff, the stylesheet builder, the scheduler and the asset rules
-to their answers — 223 checks, no network. `hash` holds SHA-256, HMAC and
+to their answers — 247 checks, no network. `hash` holds SHA-256, HMAC and
 PBKDF2 to the vectors their specifications published, and `auth` runs 65 checks
 over passwords, sessions, guards and the token, including the open redirect
 everybody forgets. `sql` runs 65 more against a real SQLite in memory, and says it is skipped rather than passing quietly when there

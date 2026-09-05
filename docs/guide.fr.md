@@ -526,6 +526,35 @@ Tout chemin comportant un segment `..`, une barre initiale, une barre inverse
 ou un composant caché est un **403** — refusé, pas normalisé. Normaliser un
 chemin hostile, c'est ainsi qu'on sort d'un répertoire.
 
+### Les intervalles d'octets
+
+Un fichier statique est servi avec `Accept-Ranges: bytes`, et un client qui en
+demande une partie l'obtient :
+
+```
+Range: bytes=0-499        les cinq cents premiers
+Range: bytes=500-         tout à partir de là
+Range: bytes=-500         les cinq cents **derniers**
+```
+
+La réponse est un 206 avec `Content-Range`. Un intervalle qui nomme des octets
+que le fichier n'a pas est un **416** portant `Content-Range: bytes */taille` —
+la ressource est là, la tranche non, et ce n'est pas la même chose qu'un 404.
+
+Tout ce qui ne peut pas être honoré — une unité qui n'est pas `bytes`, plus
+d'un intervalle, quoi que ce soit de malformé — veut dire *envoyer le tout*, ce
+qui est toujours une réponse correcte à une demande d'intervalle et ce que la
+spécification autorise un serveur à faire plutôt que de travailler plus.
+
+Un 206 n'est jamais compressé : un intervalle nomme des octets de la ressource
+telle qu'elle est, donc une tranche compressée serait une tranche de quelque
+chose que le client n'a pas demandé.
+
+La limite honnête : le fichier est lu en entier avant que la tranche soit
+découpée. C'est très bien pour les tailles dont une page est faite et faux pour
+un film, et c'est la même limite que partout ailleurs ici — rien ne circule
+encore au fil de l'eau.
+
 ## 10. JSON
 
 ```keal

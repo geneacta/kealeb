@@ -513,6 +513,33 @@ Any path with a `..` segment, a leading `/`, a backslash, or a dotfile
 component is a **403** — refused, not normalised. Normalising a hostile path
 is how a directory gets escaped.
 
+### Ranges
+
+A static file is served with `Accept-Ranges: bytes`, and a client that asks for
+part of one gets it:
+
+```
+Range: bytes=0-499        the first five hundred
+Range: bytes=500-         everything from there
+Range: bytes=-500         the **last** five hundred
+```
+
+The answer is a 206 with `Content-Range`. A range naming bytes the file does
+not have is a **416** carrying `Content-Range: bytes */size` — the resource is
+there, the slice is not, and that is a different thing from a 404.
+
+Anything this cannot honour — a unit that is not bytes, more than one range,
+anything malformed — means *send the whole thing*, which is always a correct
+answer to a range request and is what the specification allows a server to do
+rather than working harder.
+
+A 206 is never compressed: a range names bytes of the resource as it is, so a
+compressed slice would be a slice of something the client did not ask for.
+
+The honest limit: the file is read whole before the slice is cut. That is fine
+for the sizes a page is made of and wrong for a film, and it is the same
+limitation as everywhere else here — nothing streams yet.
+
 ## 10. JSON
 
 ```keal

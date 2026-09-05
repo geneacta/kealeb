@@ -621,6 +621,9 @@ public func worthCompressing(contentType: String): Bool {
 package proc squeeze(req: Request, var res: Response, from: Int) {
     if (res.upgrade) { return }
     if (res.code == 304) { return }
+    // A range names bytes of the resource as it is, so a compressed 206 would
+    // be a slice of something the client did not ask for.
+    if (res.code == 206) { return }
     if (not worthCompressing(res.headers.get("content-type") ?: "")) { return }
     res.with("vary", "accept-encoding")
     if (res.headers.containsKey("content-encoding")) { return }

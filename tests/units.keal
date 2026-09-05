@@ -156,6 +156,8 @@ proc testHttp() {
     ok(not headOut.all().endsWith("<p>x</p>"), "but sends no body")
 
     same(statusText(404), "Not Found", "a status has a name")
+    same(statusText(416), "Range Not Satisfiable", "including the one a range gets wrong")
+    same(statusText(206), "Partial Content", "and the one it gets right")
     same(statusText(499), "Client Error", "and one that has none gets its class")
 }
 
@@ -343,6 +345,50 @@ proc testJson() {
     val emoji = parseJson("\"\\ud83d\\ude00\"")
     ok(emoji != null, "a surrogate pair reads")
     if (emoji != null) { sameInt(emoji.text().length, 1, "as one character") }
+}
+
+// ------------------------------------------------------------- the ranges
+
+proc testRanges() {
+    // The three forms, against a hundred bytes.
+    val first = parseRange("bytes=0-9", 100)
+    ok(first != null, "the first ten bytes")
+    if (first != null) {
+        sameInt(first.from, 0, "from zero")
+        sameInt(first.to, 9, "to nine, inclusive as HTTP means it")
+        sameInt(first.length(), 10, "which is ten bytes")
+    }
+
+    val rest = parseRange("bytes=50-", 100)
+    ok(rest != null, "everything from a point")
+    if (rest != null) { sameInt(rest.from, 50, "starts there") }
+    if (rest != null) { sameInt(rest.to, 99, "and runs to the end") }
+
+    // The one that reads backwards, and the one people implement wrongly.
+    val last = parseRange("bytes=-10", 100)
+    ok(last != null, "the last ten bytes")
+    if (last != null) { sameInt(last.from, 90, "counted from the end, not the start") }
+    if (last != null) { sameInt(last.to, 99, "and ending at the end") }
+
+    val everything = parseRange("bytes=-500", 100)
+    ok(everything != null, "asking for more from the end than there is")
+    if (everything != null) { sameInt(everything.from, 0, "gives all of it") }
+
+    val past = parseRange("bytes=100-200", 100)
+    ok(past != null, "a range beyond the end is answered")
+    if (past != null) { ok(not past.satisfiable, "and is not satisfiable — a 416, not a 404") }
+
+    val clipped = parseRange("bytes=90-500", 100)
+    ok(clipped != null, "a range that runs past the end is clipped")
+    if (clipped != null) { sameInt(clipped.to, 99, "to the last byte there is") }
+
+    // Everything that means *send the whole thing*.
+    ok(parseRange("", 100) == null, "no header at all")
+    ok(parseRange("items=0-9", 100) == null, "a unit that is not bytes")
+    ok(parseRange("bytes=0-9,20-29", 100) == null, "more than one range")
+    ok(parseRange("bytes=", 100) == null, "nothing after the equals")
+    ok(parseRange("bytes=abc-def", 100) == null, "something that is not a number")
+    ok(parseRange("nonsense", 100) == null, "and something that is not a range")
 }
 
 // ------------------------------------------------------------ the uploads
@@ -687,6 +733,7 @@ testLive()
 testCss()
 testKeyed()
 testUploads()
+testRanges()
 testMistakes()
 testStopping()
 testFilters()

@@ -302,12 +302,17 @@ public class App(
     public proc files(prefix: String, dir: String) {
         val root = dir.endsWith("/") ? dir.substring(0, dir.length - 1) : dir
         val at = prefix.endsWith("/") ? prefix.substring(0, prefix.length - 1) : prefix
-        this.router.get("${at}/{path...}", { req -> serveFile(root, req.param("path"), req.headerOr("if-none-match", "")) })
+        this.router.get("${at}/{path...}", { req ->
+            serveFile(root, req.param("path"), req.headerOr("if-none-match", ""),
+                      req.headerOr("range", ""))
+        })
     }
 
     /// Serve one file at one path — a favicon, a `robots.txt`.
     public proc file(path: String, filePath: String) {
-        this.router.get(path, { req -> serveFile("", filePath, req.headerOr("if-none-match", "")) })
+        this.router.get(path, { req ->
+            serveFile("", filePath, req.headerOr("if-none-match", ""), req.headerOr("range", ""))
+        })
     }
 
     // ---------------------------------------------------------------- run
@@ -584,7 +589,8 @@ public func safePath(rel: String): Bool {
 /// The ETag is the file's timestamp and size, which is what a cache needs and
 /// all a static file can honestly promise; a client that sends it back gets a
 /// 304 and no body.
-public func serveFile(root: String, rel: String, ifNoneMatch: String = ""): Response {
+public func serveFile(root: String, rel: String, ifNoneMatch: String = "",
+                      range: String = ""): Response {
     if (not root.isEmpty()) {
         if (not safePath(rel)) { return notFound("Forbidden").status(403) }
     }
@@ -598,10 +604,36 @@ public func serveFile(root: String, rel: String, ifNoneMatch: String = ""): Resp
     val h = fileRead(path)
     if (h == 0) { return notFound("Could not read ${rel}").status(500) }
     val size = blobSize(h)
+
+    // `Accept-Ranges` goes on every file, because a client asks for a range
+    // only when it has been told it may. Without it, a video seeks by
+    // downloading everything before the point it wanted.
+    val span = parseRange(range, size)
+    if (span != null) {
+        if (not span.satisfiable) {
+            blobFree(h)
+            val no = notFound("That range is not in this file").status(416)
+            return no.with("accept-ranges", "bytes").with("content-range", "bytes */${size}")
+        }
+        val slice = buf(span.length() + 1)
+        slice.raw(h, span.from, span.length())
+        blobFree(h)
+        val part = bytes(mimeOf(path), slice).status(206)
+        part.with("accept-ranges", "bytes")
+        part.with("content-range", "bytes ${span.from}-${span.to}/${size}")
+        part.with("etag", tag)
+        part.with("last-modified", httpDate(stamp))
+        return part
+    }
+
     val body = buf(size)
     body.raw(h, 0, size)
     blobFree(h)
-    return bytes(mimeOf(path), body).with("etag", tag).with("last-modified", httpDate(stamp))
+    val whole = bytes(mimeOf(path), body)
+    whole.with("accept-ranges", "bytes")
+    whole.with("etag", tag)
+    whole.with("last-modified", httpDate(stamp))
+    return whole
 }
 
 /// How big a file is, without reading it. Two `stat`s beat reading a file
