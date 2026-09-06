@@ -1,7 +1,7 @@
 <!-- kealeb-band:start -->
 <p align="right">
-  <a href="https://github.com/geneacta/kealeb/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square&labelColor=2b2b2b"></a>
-  <a href="https://github.com/geneacta/kealeb/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-87%25-blue?style=flat-square&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealeb/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat"></a>
+  <a href="https://github.com/geneacta/kealeb/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-87%25-brightgreen?style=flat"></a>
 </p>
 <!-- kealeb-band:end -->
 
