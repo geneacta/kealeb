@@ -175,14 +175,17 @@ fi
 # set of pages promising each other exist is a promise nothing keeps by itself.
 if command -v python3 >/dev/null 2>&1; then
   printf '%-8s ' "site"
-  before=$(find site -name '*.html' -newer site/build.py 2>/dev/null | wc -l)
   python3 site/build.py > build/site.out
+  # Only the pages build.py writes. It looked at all of `site/`, which meant an
+  # edit to the hand-written `style.css` was reported as "the pages were not
+  # rebuilt" — a true failure with a false reason, which is worse than a silent
+  # one because it sends you to fix something that is not wrong.
   if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
-    if ! git diff --quiet -- site/ 2>/dev/null; then
-      echo "FAILED — site/ is out of date."
+    if ! git diff --quiet -- 'site/*.html' 'site/fr/*.html' 2>/dev/null; then
+      echo "FAILED — the generated pages are out of date."
       echo "  A document changed and the pages were not rebuilt, so the site would"
       echo "  say something this repository does not. What differs:"
-      git diff --stat -- site/ | sed 's/^/    /'
+      git diff --stat -- 'site/*.html' 'site/fr/*.html' | sed 's/^/    /'
       echo "  Run python3 site/build.py and commit what it changes."
       exit 1
     fi
@@ -190,6 +193,26 @@ if command -v python3 >/dev/null 2>&1; then
   echo "$(grep -c . build/site.out) pages, and every link on them resolves"
 else
   echo "site     skipped — no python3, so the site is neither built nor checked"
+fi
+
+# Whether the pages fit the window they are read in.
+#
+# Everything above reads the site without laying it out: the link checker reads
+# hrefs, the contrast checker reads colours, and a page can pass both while
+# being four hundred pixels wider than a phone. This one asks a browser. It
+# found six the day it was added, five of them only visible at 390 points.
+#
+# It reports an absence, so it runs its own control: a block wider than any
+# window is put into every page, and every page must then say so. A check for
+# the absence of a thing that has never once seen the thing is decoration.
+if command -v python3 >/dev/null 2>&1; then
+  printf '%-8s ' "layout"
+  python3 ci/overflow.py --quiet || exit 1
+  python3 ci/overflow.py --control > /dev/null || {
+    echo "layout   FAILED — the overflow check cannot see an overflow it made itself."
+    python3 ci/overflow.py --control
+    exit 1
+  }
 fi
 
 # gzip, read by something that did not write it.

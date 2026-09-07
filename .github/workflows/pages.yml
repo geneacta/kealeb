@@ -51,6 +51,15 @@ jobs:
             exit 1
           }
 
+      # And whether those pages fit the window they will be read in. The
+      # runner has Chrome; if a future image does not, the check says so and
+      # skips rather than failing, which is the same thing it does on a laptop
+      # without a browser.
+      - name: The pages fit the window
+        run: |
+          python3 ci/overflow.py --quiet
+          python3 ci/overflow.py --control
+
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

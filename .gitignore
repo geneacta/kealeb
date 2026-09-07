@@ -16,3 +16,7 @@ build/
 build/served/
 build/uploaded.bin
 build/kept-*.bin
+
+# the frame ci/overflow.py renders the pages inside; it removes its own, but a
+# killed run should not leave one where the site gets deployed from
+site/.overflow-frame.html

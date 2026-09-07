@@ -435,6 +435,23 @@ footer.foot { display: flex; justify-content: space-between; align-items: center
 .foot-r a { color: var(--dim); }
 .foot-r a:hover { color: var(--ink); }
 
+/* A grid item's `min-width` defaults to `auto`, which means min-content — and
+   min-content is wider than the track whenever the item holds a long word, a
+   button row or a code block. The track keeps its size, the item spills past
+   it, and the page scrolls sideways. Nothing looks wrong until the window is
+   narrow, which is why this was measured rather than noticed: Chrome at 500
+   points reported the guide 780px wide in a 485px window. `min-width: 0` lets
+   the item shrink to its track; the `pre` inside it already scrolls on its own. */
+/* An inline `code` holds a call chain with no spaces in it, and the default
+   only breaks a line at a space — so `html(page).status(201).type(…)` sat 297px
+   wide in a 375px window and pushed the whole page sideways. `anywhere` breaks
+   it only when it would not otherwise fit, and does not apply inside a `pre`,
+   which does not wrap at all. */
+.prose code, .dmain code { overflow-wrap: anywhere; }
+
+.hero > *, .dgrid > *, .live-grid > *, .duo > *,
+.cards > *, .cards3 > *, .cards4 > *, footer > * { min-width: 0; }
+
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; gap: 28px; }
   .live-grid { grid-template-columns: 1fr; }
@@ -445,6 +462,11 @@ footer.foot { display: flex; justify-content: space-between; align-items: center
 @media (max-width: 620px) {
   .cards4 { grid-template-columns: 1fr; }
   .nav { flex-wrap: wrap; gap: 12px; padding: 14px 20px; }
+  /* The links are wider in French than in English — "Démarrer", "Exemples" —
+     so the row that fits on one line in one language does not in the other,
+     and a row that will not wrap pushes the page out instead. Both wrap. */
+  .nav-left { flex-wrap: wrap; gap: 16px; min-width: 0; }
+  .nav-links { flex-wrap: wrap; gap: 18px; }
   .hero, .counts-wrap, .live, .doc-head { padding-left: 20px; padding-right: 20px; }
 }
 
