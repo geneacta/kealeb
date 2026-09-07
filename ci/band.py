@@ -25,8 +25,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 START = "<!-- kealeb-band:start -->"
 END = "<!-- kealeb-band:end -->"
-SHIELD = ("https://img.shields.io/badge/%s-%s-blue"
-          "?style=flat-square&labelColor=2b2b2b")
+# The look of the badges is Tony's, taken from what he wrote by hand on
+# 2026-09-07: right-aligned, `flat`, no label colour, and the Keal share in
+# green rather than blue. This script counts the numbers; it does not choose
+# how they look, and the first thing it did after he changed them was try to
+# put them back. A generator that overwrites a decision is a generator nobody
+# can edit around.
+SHIELD = "https://img.shields.io/badge/%s-%s-%s?style=flat"
 
 
 def read(name):
@@ -63,11 +68,11 @@ def band():
     files = "https://github.com/geneacta/kealeb/tree/main/src"
     return "\n".join([
         START,
-        '<p align="center">',
+        '<p align="right">',
         '  <a href="%s"><img alt="version" src="%s"></a>'
-        % (releases, SHIELD % ("version", version())),
+        % (releases, SHIELD % ("version", version(), "blue")),
         '  <a href="%s"><img alt="written in Keal" src="%s"></a>'
-        % (files, SHIELD % ("written%20in%20Keal", "%d%%25" % share)),
+        % (files, SHIELD % ("written%20in%20Keal", "%d%%25" % share, "brightgreen")),
         "</p>",
         END,
     ])

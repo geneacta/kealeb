@@ -124,6 +124,26 @@ found=$(cd build && ./leaks 2>&1)
 }
 echo "a cycle built on purpose is still reported as exactly one"
 
+# What a first visit weighs.
+#
+# The logo arrived from the design handoff at 479 px and 194 KB, and it is the
+# favicon, the share card and a mark drawn at **thirty pixels** — so every page
+# carried a fifth of a megabyte to draw a thumbnail. 256 px serves all of those
+# at 57 KB. Nothing in the suite would ever have said so: a heavy asset is not
+# a broken one, and the link checker only asks whether a file is there.
+printf '%-8s ' "weight"
+heavy=$(find site/assets -type f -size +100k 2>/dev/null | head -3)
+if [ -n "$heavy" ]; then
+  echo "FAILED — an asset over 100 KB, which every page pays for:"
+  ls -lh $heavy | awk '{print "    " $9 "  " $5}'
+  echo "  Resize it to what it is drawn at. sips -Z 256 is usually the answer."
+  exit 1
+fi
+assets=$(find site/assets -type f -exec cat {} + 2>/dev/null | wc -c | tr -d ' ')
+page=$(wc -c < site/index.html | tr -d ' ')
+css=$(wc -c < site/style.css | tr -d ' ')
+echo "a first visit is $(( (page + css + assets) / 1024 )) KB before a single font"
+
 # The site's colours, measured rather than looked at.
 #
 # The identity states its contrast as a constraint — body text at 7:1, prose
