@@ -5,7 +5,7 @@
 </p>
 <!-- kealeb-band:end -->
 
-<p align="center"><img src="kealeb.png" alt="Keal" width="360"></p>
+<p align="center"><img src="site/assets/k.png" alt="kealeb" width="120"></p>
 
 # kealeb — web pages that stay on the server, written in Keal
 
