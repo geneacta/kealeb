@@ -20,19 +20,23 @@
 <meta name="twitter:description" content="Un cadriciel web pour Keal : les routes de Spring Boot, les pages de Vaadin, et tout cela en .keal.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Familjen+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="../assets/k.png">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 <div class="wrap">
 <nav class="nav">
   <div class="nav-left">
-    <a class="wordmark" href="index.html">kealeb</a>
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="../assets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">eb</span></span>
+    </a>
     <div class="nav-links"><a href="index.html" class="tab-active">Accueil</a><a href="guide.html">Le guide</a><a href="examples.html">Exemples</a></div>
   </div>
   <div class="nav-right">
     <span class="badge">v0.1.0</span>
-    <a class="btn-keal" href="https://geneacta.github.io/keal/fr/">Keal ↗</a>
+    <a class="btn-keal" href="https://geneacta.github.io/keal/fr/">Keal</a>
     <a class="btn-lang" href="../index.html">English</a>
     <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
   </div>
@@ -40,12 +44,24 @@
 
 <section class="hero">
   <div>
+    <span class="pill">Un fil, aucun verrou, seule la différence traverse</span>
     <h1>Des pages web qui restent sur le serveur</h1>
     <p class="sub">Des routes et des gestionnaires comme Spring Boot, des pages faites de composants comme Vaadin — et tout cela est du <code>.keal</code>. Le C en dessous ouvre des sockets et déplace des octets. Il ne décide rien.</p>
     <div class="hero-cta"><a class="cta" href="guide.html">Lire le guide</a>
       <a class="cta2" href="https://github.com/geneacta/kealeb">Sur GitHub</a></div>
   </div>
-  <div class="hero-code"><pre class="mono">import &quot;kealeb/kealeb.keal&quot;
+  <div class="hero-code"><div class="cwin"><div class="cwin-bar"><span><span class="verb">GET</span> <span class="path">/ · ws</span></span><span class="said">200 · un patch</span></div><pre>site.livePage(&quot;/&quot;, { req -&gt;
+    var count = 0
+    view({ -&gt; column([
+        h1(&quot;Clicked ${count} times&quot;),
+        button(&quot;Click me&quot;, { e -&gt; count = count + 1 })
+    ]) })
+})</pre><div class="answer"><pre>{&quot;p&quot;:[[&quot;t&quot;,&quot;0.0.0&quot;,&quot;Clicked 1 times&quot;]]}</pre><p>Un patch. Le navigateur pose un nœud texte — pas de schéma JSON, pas de point d'entrée, pas d'état client, rien à tenir synchronisé.</p></div></div></div>
+</section>
+<section class="counts-wrap"><table class="counts"><thead><tr><th></th><th>lignes</th><th>ce que c'est</th></tr></thead><tbody><tr><td class="lang">Keal</td><td class="n">6&thinsp;482</td><td>tout le cadriciel : HTTP, routage, arbre de composants, rendu, feuilles de style, JSON, tramage WebSocket, gzip, ordonnanceur, sessions, diff, couche SQLite, et le hachage sur lequel repose la sécurité</td></tr><tr><td class="lang">C</td><td class="n">786</td><td>sockets, poll, blobs d'octets, fichiers par morceaux — deux en-têtes, pas de .c</td></tr><tr><td class="lang">JavaScript</td><td class="n">143</td><td>le client du navigateur : ouvrir une socket, signaler un événement, appliquer un patch</td></tr></tbody></table></section>
+<section class="live">
+  <h2>Un programme entier</h2>
+  <div class="live-grid"><div class="cwin"><div class="cwin-bar"><span><span class="verb">GET</span> <span class="path">/</span></span><span class="said">200 · une page</span></div><pre>import &quot;kealeb/kealeb.keal&quot;
 
 val site = app(&quot;Hello&quot;)
 
@@ -54,18 +70,7 @@ site.page(&quot;/&quot;, { req -&gt; column([
     p(&quot;from Keal&quot;)
 ])})
 
-site.run(8080)</pre></div>
-</section>
-<section class="counts-wrap"><table class="counts"><thead><tr><th></th><th>lignes</th><th>ce que c'est</th></tr></thead><tbody><tr><td class="lang">Keal</td><td class="n">6&thinsp;482</td><td>tout le cadriciel : HTTP, routage, arbre de composants, rendu, feuilles de style, JSON, tramage WebSocket, gzip, ordonnanceur, sessions, diff, couche SQLite, et le hachage sur lequel repose la sécurité</td></tr><tr><td class="lang">C</td><td class="n">786</td><td>sockets, poll, blobs d'octets, fichiers par morceaux — deux en-têtes, pas de .c</td></tr><tr><td class="lang">JavaScript</td><td class="n">143</td><td>le client du navigateur : ouvrir une socket, signaler un événement, appliquer un patch</td></tr></tbody></table></section>
-<section class="live">
-  <h2>Une page vivante, et tout ce que coûte un clic</h2>
-  <div class="live-grid"><pre class="mono">site.livePage(&quot;/&quot;, { req -&gt;
-    var count = 0
-    view({ -&gt; column([
-        h1(&quot;Clicked ${count} times&quot;),
-        button(&quot;Click me&quot;, { e -&gt; count = count + 1 })
-    ]) })
-})</pre><div class="patch"><pre class="mono">{&quot;p&quot;:[[&quot;t&quot;,&quot;0.0.0&quot;,&quot;Clicked 1 times&quot;]]}</pre><p>Un patch. Le navigateur pose un nœud texte. Il n'y a pas de schéma JSON à écrire, pas de point d'entrée, pas d'état client, et rien à tenir synchronisé — <code>count</code> est une variable Keal ordinaire et la page est une fonction d'elle.</p></div></div>
+site.run(8080)</pre></div><div class="patch"><p>Cinq lignes et un import. C'est une page, mise en forme, en mode sombre si la machine l'est, et elle marche dans tout ce qui sait lire du HTML — il n'y a aucun JavaScript dessus.</p></div></div>
 </section>
 <section class="cards4"><div class="card"><h3>Un fil, aucun verrou</h3><p>Chaque socket est non bloquante, un seul <code>poll</code> mène tout, et un gestionnaire s'exécute sans que rien d'autre ne tourne. L'état de session est un objet Keal ordinaire et une course n'est pas une chose qu'on puisse écrire ici. Le prix est énoncé et non caché : un gestionnaire qui bloque bloque le serveur.</p></div><div class="card"><h3>Seule la différence traverse</h3><p>Une page vivante garde son arbre sur le serveur. Un événement exécute un gestionnaire, l'arbre est reconstruit, les deux sont comparés, et ce qui traverse la socket est la liste des changements — sept sortes de patch, chacune un appel dans le navigateur.</p></div><div class="card"><h3>Rien n'est lié tant qu'on ne le demande pas</h3><p>Aucune dépendance. SQLite arrive avec un second import et un drapeau ; un programme qui n'ouvre pas de base ne s'y lie jamais. Le hachage, la compression et le tramage WebSocket sont du Keal.</p></div><div class="card"><h3>Vérifié par ce qui ne l'a pas écrit</h3><p>SHA-256, HMAC et PBKDF2 contre les vecteurs publiés par leurs spécifications. La sortie gzip donnée au <code>gzip</code> du système et à Python, les deux devant rendre les octets. Le client du navigateur exécuté contre un vrai serveur à chaque construction.</p></div></section>
 

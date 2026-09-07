@@ -124,6 +124,17 @@ found=$(cd build && ./leaks 2>&1)
 }
 echo "a cycle built on purpose is still reported as exactly one"
 
+# The site's colours, measured rather than looked at.
+#
+# The identity states its contrast as a constraint — body text at 7:1, prose
+# and the smaller text at 4.5:1, an accent and the text on top of it at 7:1 —
+# and a constraint nothing measures is a preference. The link checker will
+# catch a broken `assets/`; it will never catch a paragraph nobody can read.
+if command -v python3 >/dev/null 2>&1; then
+  printf '%-8s ' "colour"
+  python3 ci/contrast.py --quiet || exit 1
+fi
+
 # The badge band at the top of the README.
 #
 # Keal's equivalent is deliberately not gated, because its second number counts

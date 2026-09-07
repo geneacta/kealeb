@@ -254,19 +254,23 @@ def page(lang, filename, title, description, body, active=None, toc=None):
 <meta name="twitter:description" content="%(desc)s">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Familjen+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="%(prefix)sassets/k.png">
 <link rel="stylesheet" href="%(prefix)sstyle.css">
 </head>
 <body>
 <div class="wrap">
 <nav class="nav">
   <div class="nav-left">
-    <a class="wordmark" href="%(home)s">kealeb</a>
+    <a class="mark" href="%(home)s">
+      <img class="mark-k" src="%(prefix)sassets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">eb</span></span>
+    </a>
     <div class="nav-links">%(links)s</div>
   </div>
   <div class="nav-right">
     <span class="badge">v%(version)s</span>
-    <a class="btn-keal" href="%(keal)s">Keal ↗</a>
+    <a class="btn-keal" href="%(keal)s">Keal</a>
     <a class="btn-lang" href="%(other)s">%(other_label)s</a>
     <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
   </div>
@@ -363,8 +367,24 @@ def code(text, cls="mono"):
     return '<pre class="%s">%s</pre>' % (cls, html.escape(text))
 
 
+def window(verb, path, said, source, answer=None, note=None):
+    """A code block in this site's dress: what was asked, the code, and — under
+    a dashed rule — what came back. The framework is a request and an answer,
+    so its code blocks are too."""
+    out = ['<div class="cwin"><div class="cwin-bar">'
+           '<span><span class="verb">%s</span> <span class="path">%s</span></span>'
+           '<span class="said">%s</span></div>' % (verb, html.escape(path), html.escape(said))]
+    out.append("<pre>%s</pre>" % html.escape(source))
+    if answer is not None:
+        out.append('<div class="answer"><pre>%s</pre><p>%s</p></div>'
+                   % (html.escape(answer), note))
+    out.append("</div>")
+    return "".join(out)
+
+
 HERO = {
     "en": {
+        "pill": "One thread, no locks, only the difference travels",
         "title": "Web pages that stay on the server",
         "sub": ("Routes and handlers like Spring Boot, pages built out of components like "
                 "Vaadin — and the whole of both is <code>.keal</code> files. The C underneath "
@@ -372,6 +392,7 @@ HERO = {
         "a": "Read the guide", "b": "On GitHub",
     },
     "fr": {
+        "pill": "Un fil, aucun verrou, seule la différence traverse",
         "title": "Des pages web qui restent sur le serveur",
         "sub": ("Des routes et des gestionnaires comme Spring Boot, des pages faites de "
                 "composants comme Vaadin — et tout cela est du <code>.keal</code>. Le C en "
@@ -428,20 +449,27 @@ WORDS = {
            "sockets, poll, byte blobs, files in pieces — two headers, no .c file",
            "the browser client: open a socket, report an event, apply a patch",
            "lines", "what it is",
-           "A live page, and the whole of what a click costs",
-           "One patch. The browser sets one text node. There is no JSON schema to write, no "
-           "endpoint, no client state, and nothing to keep in sync — <code>count</code> is an "
-           "ordinary Keal variable and the page is a function of it."),
+           "200 · one patch",
+           "One patch. The browser sets one text node — no JSON schema, no endpoint, no client "
+           "state, nothing to keep in sync.",
+           "A whole program",
+           "200 · a page",
+           "Five lines and one import. It is a page, styled, in dark mode if the machine is, and "
+           "it works in anything that can read HTML — there is no JavaScript on it at all."),
     "fr": ("tout le cadriciel : HTTP, routage, arbre de composants, rendu, feuilles de style, "
            "JSON, tramage WebSocket, gzip, ordonnanceur, sessions, diff, couche SQLite, et le "
            "hachage sur lequel repose la sécurité",
            "sockets, poll, blobs d'octets, fichiers par morceaux — deux en-têtes, pas de .c",
            "le client du navigateur : ouvrir une socket, signaler un événement, appliquer un patch",
            "lignes", "ce que c'est",
-           "Une page vivante, et tout ce que coûte un clic",
-           "Un patch. Le navigateur pose un nœud texte. Il n'y a pas de schéma JSON à écrire, pas "
-           "de point d'entrée, pas d'état client, et rien à tenir synchronisé — <code>count</code> "
-           "est une variable Keal ordinaire et la page est une fonction d'elle."),
+           "200 · un patch",
+           "Un patch. Le navigateur pose un nœud texte — pas de schéma JSON, pas de point "
+           "d'entrée, pas d'état client, rien à tenir synchronisé.",
+           "Un programme entier",
+           "200 · une page",
+           "Cinq lignes et un import. C'est une page, mise en forme, en mode sombre si la machine "
+           "l'est, et elle marche dans tout ce qui sait lire du HTML — il n'y a aucun JavaScript "
+           "dessus."),
 }
 
 
@@ -461,23 +489,29 @@ def landing(lang):
     body = """
 <section class="hero">
   <div>
+    <span class="pill">%(pill)s</span>
     <h1>%(title)s</h1>
     <p class="sub">%(sub)s</p>
     <div class="hero-cta"><a class="cta" href="guide.html">%(a)s</a>
       <a class="cta2" href="https://github.com/geneacta/kealeb">%(b)s</a></div>
   </div>
-  <div class="hero-code">%(hello)s</div>
+  <div class="hero-code">%(live)s</div>
 </section>
 <section class="counts-wrap">%(table)s</section>
 <section class="live">
-  <h2>%(livehead)s</h2>
-  <div class="live-grid">%(live)s<div class="patch">%(patch)s<p>%(note)s</p></div></div>
+  <h2>%(firsthead)s</h2>
+  <div class="live-grid">%(hello)s<div class="patch"><p>%(firstnote)s</p></div></div>
 </section>
 <section class="cards4">%(cards)s</section>
 """ % {
+        "pill": hero["pill"],
         "title": hero["title"], "sub": hero["sub"], "a": hero["a"], "b": hero["b"],
-        "hello": code(HELLO), "table": table, "livehead": w[5],
-        "live": code(LIVE), "patch": code(PATCH), "note": w[6], "cards": cards,
+        "live": window("GET", "/ · ws", w[5], LIVE, PATCH, w[6]),
+        "table": table,
+        "firsthead": w[7],
+        "hello": window("GET", "/", w[8], HELLO),
+        "firstnote": w[9],
+        "cards": cards,
     }
     title = ("kealeb — web pages that stay on the server" if lang == "en"
              else "kealeb — des pages web qui restent sur le serveur")
