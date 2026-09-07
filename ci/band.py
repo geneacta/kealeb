@@ -47,6 +47,20 @@ def version():
     raise SystemExit("ci/band.py: keal.toml has no version")
 
 
+def keal_version():
+    """Which Keal this is built against, from `keal.toml`.
+
+    Read rather than remembered, for the reason the version above it is: a
+    number kept in a second place is a number that is wrong the day the first
+    one moves. Missing, it stops rather than guessing.
+    """
+    for line in read("keal.toml").splitlines():
+        m = re.match(r'\s*keal\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    raise SystemExit("ci/band.py: keal.toml has no `keal` line saying which Keal this needs")
+
+
 def lines():
     """Keal, C and JavaScript, counted the same way the README's table is."""
     keal = sum(len(read("src/" + n).splitlines())
@@ -73,6 +87,9 @@ def band():
         % (releases, SHIELD % ("version", version(), "blue")),
         '  <a href="%s"><img alt="written in Keal" src="%s"></a>'
         % (files, SHIELD % ("written%20in%20Keal", "%d%%25" % share, "brightgreen")),
+        '  <a href="%s"><img alt="Keal" src="%s"></a>'
+        % ("https://github.com/geneacta/keal/releases/tag/v" + keal_version(),
+           SHIELD % ("Keal", keal_version(), "orange")),
         "</p>",
         END,
     ])
