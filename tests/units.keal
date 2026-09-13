@@ -634,6 +634,100 @@ proc testFilters() {
     ok(trail.contains("outer out"), "while the filters outside it still unwound")
 }
 
+
+// ------------------------------------------------------ answering once
+
+/// `--render` and `--routes`: one answer, then the process ends.
+///
+/// The point of asking the program itself is that the answer is the
+/// program's own. So what has to be held to a test is not that HTML comes
+/// out — it is that the HTML comes out of **the same path a browser's
+/// request takes**, which means through every filter, with the headers a
+/// browser sends.
+///
+/// It did not, for one run of `src/app.keal`: the flag called the router
+/// directly, so a route behind an authentication filter rendered as though
+/// signed in and a 404 missed the site's own page. The chain is built once
+/// now and both callers use it.
+proc testRenderOnce() {
+    val site = app("render")
+    site.log = false
+    val trail: List<String> = []
+
+    site.use({ req, next ->
+        trail.add("filter")
+        val res = next.on(req)
+        res.with("x-seen", "1")
+    })
+    // A filter that refuses, which is the shape of authentication: the
+    // handler must never run, and a preview that showed its page would be
+    // showing a page nobody can visit.
+    site.use({ req, next ->
+        if (req.path.startsWith("/private")) { notFound("sign in first").status(403) }
+        else { next.on(req) }
+    })
+    site.get("/", { req -> trail.add("handler"); text("the page") })
+    site.get("/private", { req -> trail.add("handler"); text("secrets") })
+    // A route that answers differently depending on what the client accepts,
+    // which is how kealeb chooses between a page and a sentence.
+    site.get("/either", { req ->
+        if (wantsHtml(req)) { text("a page") } else { text("a sentence") }
+    })
+
+    val page = site.renderedPage("/")
+    same(page.text(), "the page", "the page is the handler's own output")
+    ok(trail.contains("filter"), "and it came through the filters")
+    same(page.headers.get("x-seen") ?: "", "1",
+         "a filter may change what the preview shows, as it changes what a browser gets")
+
+    trail.clear()
+    val refused = site.renderedPage("/private")
+    sameInt(refused.code, 403, "a filter that refuses refuses the preview too")
+    ok(not trail.contains("handler"),
+       "and the handler never ran, so no page nobody can visit is shown")
+
+    same(site.renderedPage("/either").text(), "a page",
+         "the request says it accepts html, because a browser's does")
+
+    // A missing route renders the site's 404 — which is what a browser is
+    // sent, so rendering it is the preview working rather than failing. The
+    // status is there for anything that wants it; the flag does not turn it
+    // into a failure, because the question *does this route exist* is what
+    // `--routes` answers.
+    sameInt(site.renderedPage("/nowhere").code, 404, "a path that is not there")
+    ok(site.renderedPage("/nowhere").text() != "",
+       "and it still renders something, as a browser would be shown")
+
+    // The chain the server uses and the chain the preview uses are one thing.
+    // Built twice, they would agree the day they were written.
+    val s = site.serverOn(0)
+    same(s.handle(request("GET", "/")).text(), site.renderedPage("/").text(),
+         "the server's answer and the preview's are the same answer")
+
+    // `--routes` lists what the router holds, the framework's own included:
+    // an editor reading the source cannot see the stylesheet, the client
+    // script or the live socket, and the difference is worth seeing rather
+    // than worth hiding.
+    site.mount()
+    val paths: List<String> = []
+    for (r in site.router.routes) { paths.add(r.method + " " + r.pattern) }
+    ok(paths.contains("GET /"), "a route the program registered")
+    ok(paths.contains("GET /kealeb/kealeb.css"), "and one the framework did")
+
+    // The flags themselves, read from an argument list rather than from the
+    // real command line — so the reading can be checked without a process.
+    same(firstAfter(["--render", "/x"], "--render") ?: "(none)", "/x",
+         "a flag with a value")
+    same(firstAfter(["a", "--render", "/x", "b"], "--render") ?: "(none)", "/x",
+         "wherever it sits")
+    // A flag at the very end has no value, and that is not the same as being
+    // absent: `--render` alone asks for the empty path, which answers 404.
+    same(firstAfter(["--render"], "--render") ?: "(none)", "",
+         "a flag with nothing after it")
+    same(firstAfter(["--routes"], "--render") ?: "(none)", "(none)",
+         "and a flag that is not there at all")
+}
+
 // --------------------------------------------------------------- the styles
 
 proc testCss() {
@@ -735,6 +829,7 @@ testRanges()
 testMistakes()
 testStopping()
 testFilters()
+testRenderOnce()
 testSchedule()
 testAssets()
 println("${checks} checks passed")

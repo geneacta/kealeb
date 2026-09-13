@@ -347,6 +347,15 @@ s.maxRequests = 500                   // per connection, then close
 s.handle = { req -&gt; myOwnDispatch(req) }
 s.run()</code></pre>
 <p>There is no TLS. Put it behind a reverse proxy, which is where a terminator belongs; <code>X-Forwarded-For</code> arrives as an ordinary header and <code>req.peer</code> is the proxy.</p>
+<h3 id="answering-once-and-not-serving">Answering once, and not serving</h3>
+<p><code>run</code> looks at the command line first. Two flags make the program answer one question and exit instead of binding a port:</p>
+<pre class="lang-sh"><code>build/app --routes            # one route a line: GET /user/{id}
+build/app --render /user/7    # that page&#x27;s HTML, on standard output</code></pre>
+<p>They exist so that a tool — an editor, a build step, a test — can have a page <strong>as this program builds it</strong> rather than as something else guesses it would. <code>--render</code> puts a browser's request through <code>chain()</code>, which is the same construction the server uses and not a copy of it: filters run, <code>onNotFound</code> answers a path with no route, <code>secure</code> adds its headers. A route behind an authentication filter renders the refusal a visitor gets, which is the point.</p>
+<p>A body is printed whatever the status, because that is what a browser is shown — a rendered 404 page is the preview working, not failing. If what you want to know is whether a route exists, that is <code>--routes</code>, which also lists the framework's own: <code>/kealeb/kealeb.css</code>, <code>/kealeb/kealeb.js</code>, <code>/kealeb/live</code>.</p>
+<p>If your program has its own <code>main</code> and does not call <code>run</code>, ask for the same thing directly:</p>
+<pre class="lang-keal"><code>if (site.answeredOnce()) { return }   // --render / --routes, then stop
+site.serverOn(8080).run()</code></pre>
 <p>Standard output is line-buffered from the moment the server starts, so a log piped to a file or a supervisor arrives as it is written.</p>
 <h3 id="compression">Compression</h3>
 <p>Every response a browser can read gzipped, is:</p>

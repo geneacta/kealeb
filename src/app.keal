@@ -329,14 +329,120 @@ public class App(
         // The chain, built from the inside out: the router is the innermost
         // thing, each filter wraps what is already there, and `secure` — if it
         // is on — wraps the lot.
+        s.handle = this.chain()
+        val pages = this.live
+        pages.host = s
+        s.onOpen = { fd: Int, req: Request -> pages.opened(fd, req.queryOr("s")) }
+        s.onMessage = { fd: Int, message: String -> pages.receive(fd, message) }
+        s.onClose = { fd: Int -> pages.detach(fd) }
+        return s
+    }
+
+    /// Serve, until the process is stopped — unless the command line asks for
+    /// one answer instead.
+    ///
+    /// `--render /path` prints that page's HTML and exits; `--routes` prints
+    /// the routing table and exits. Both are here rather than in a separate
+    /// tool because **the answer has to come from this program**: a page is
+    /// whatever this application's handlers build, and anything that
+    /// reproduced that from the outside would be a second implementation
+    /// agreeing with the first on the day it was written.
+    ///
+    /// This is the same bargain keal-view makes with `--snapshot`, and for the
+    /// same reason. An editor showing a preview is either showing the
+    /// program's own output or it is showing a guess that is wrong exactly
+    /// where the page is interesting.
+    public proc run(port: Int = 8080, host: String = "127.0.0.1") {
+        if (this.answeredOnce()) { return }
+        this.serverOn(port, host).run()
+    }
+
+    /// Answer the command line if it asked something, and say whether it did.
+    ///
+    /// Split out from `run` so that a program with its own `main` can put it
+    /// wherever it likes, and so that a test can ask for the answer without a
+    /// process to kill.
+    public func answeredOnce(): Bool {
+        val asked = flagValue("--render")
+        if (asked != null) { this.renderOnce(asked); return true }
+        if (hasFlag("--routes")) { this.printRoutes(); return true }
+        return false
+    }
+
+    /// Print one page's HTML, as this application builds it.
+    ///
+    /// `mount()` first, because the stylesheet, the assets and the live
+    /// socket are registered there and a page rendered without them is a page
+    /// the server would never send.
+    ///
+    /// **The body, whatever the status, because that is what the browser
+    /// shows.** A path with no route prints this site's own 404 page — the one
+    /// `onNotFound` builds, or kealeb's line when there is none — and that is
+    /// a *correct* preview of what a visitor sees, not a failure to preview.
+    ///
+    /// It exited 4 on a non-200 for one draft, and two separate things were
+    /// wrong with that. The smaller: the C backend under `--audit` cannot
+    /// compile `exit` inside a function, which kealeb's own leak check found
+    /// immediately. The larger: a tool asking *does this route exist* should
+    /// ask `--routes`, which answers exactly that, instead of reading a
+    /// failure out of a flag whose job is to render. Two flags, two questions,
+    /// and neither pretending to answer the other.
+    ///
+    /// Only the body is printed. Keal has no standard error, so a note about
+    /// the status would have to share the stream with the HTML, and then
+    /// anything reading this would have to know which lines are the page.
+    public proc renderOnce(path: String) {
+        print(this.renderedPage(path).text())
+    }
+
+    /// The answer `--render` prints, without printing it or ending the
+    /// process — so that what the flag does can be held to a test rather than
+    /// to a reading of it.
+    public func renderedPage(path: String): Response {
+        this.mount()
+        val req = request("GET", path)
+        // **A browser's request, not a bare one.** kealeb decides whether an
+        // error is a page or a sentence from the `Accept` header — that is
+        // what `wantsHtml` is for, and it is how `onNotFound` chooses between
+        // the site's 404 page and the short line an API wants. A synthetic
+        // request with no headers would always get the second, so a preview
+        // of a missing page would show something no browser is ever sent.
+        req.headers.set("accept", "text/html")
+        req.headers.set("host", "127.0.0.1")
+        return this.chain()(req)
+    }
+
+    /// Print the routing table, one route a line: `GET /user/{id}`.
+    ///
+    /// Every route, including the ones the framework registers itself — the
+    /// stylesheet, the client script, the live socket. An editor listing
+    /// routes by reading the source cannot see those, and the difference
+    /// between the two lists is exactly the framework's own furniture, which
+    /// is worth being able to see rather than worth hiding.
+    public proc printRoutes() {
+        this.mount()
+        for (r in this.router.routes) { println(r.method + " " + r.pattern) }
+    }
+
+    /// Everything a request goes through, from the outside in.
+    ///
+    /// **One construction, two callers.** The server uses it and so does
+    /// `--render`, because a preview that skipped the filters would show a
+    /// page nobody can visit: a route behind an authentication filter would
+    /// render as though signed in, a 404 would miss the site's own `onNotFound`
+    /// page, and `secure`'s headers would be absent. It was two for one run of
+    /// this file — the flag called the router directly — and that is exactly
+    /// the shape that makes a preview *nearly* right.
+    ///
+    /// The catch sits around the router and not further out, which matters
+    /// more than it looks. A handler that throws unwinds every filter around
+    /// it on the way, so a catch outside the filters would produce a 500 that
+    /// no filter ever sees: `onError` could not replace it, and a logging
+    /// filter would not record the one request most worth recording. Inside, a
+    /// throw becomes an ordinary 500 that travels back out through the chain
+    /// like any other answer.
+    package func chain(): (Request) -> Response {
         val router = this.router
-        // The catch is here, around the router, and not further out — which
-        // matters more than it looks. A handler that throws unwinds every
-        // filter around it on the way, so a catch outside the filters would
-        // produce a 500 that no filter ever sees: `onError` could not replace
-        // it, and a logging filter would not record the one request most worth
-        // recording. Inside, a throw becomes an ordinary 500 that travels back
-        // out through the chain like any other answer.
         var chain: (Request) -> Response = { req -> attempted(router, req) }
         var at = this.filters.size - 1
         while (at >= 0) {
@@ -346,23 +452,9 @@ public class App(
             at = at - 1
         }
         val a = this.protection
-        if (a == null) {
-            s.handle = chain
-        } else {
-            val guarded = chain
-            s.handle = { req -> defended(a, guarded, req) }
-        }
-        val pages = this.live
-        pages.host = s
-        s.onOpen = { fd: Int, req: Request -> pages.opened(fd, req.queryOr("s")) }
-        s.onMessage = { fd: Int, message: String -> pages.receive(fd, message) }
-        s.onClose = { fd: Int -> pages.detach(fd) }
-        return s
-    }
-
-    /// Serve, until the process is stopped.
-    public proc run(port: Int = 8080, host: String = "127.0.0.1") {
-        this.serverOn(port, host).run()
+        if (a == null) { return chain }
+        val guarded = chain
+        return { req -> defended(a, guarded, req) }
     }
 
     /// Register what every kealeb application answers. Called by `serverOn`;
@@ -653,3 +745,33 @@ public func serveFile(root: String, rel: String, ifNoneMatch: String = "",
     res.with("last-modified", httpDate(stamp))
     return res
 }
+
+/// The value after a flag, or null when the flag is absent.
+///
+/// Null rather than `""`, because `--render ""` and no `--render` at all are
+/// different questions: the first asks for the empty path and should answer
+/// 404, the second asks for nothing and should start a server.
+///
+/// Given the argument list rather than reading it, so that the reading can be
+/// checked without a process to start.
+public func firstAfter(argv: List<String>, flag: String): String? {
+    var i = 0
+    while (i < argv.size) {
+        if (argv[i] == flag) {
+            if ((i + 1) < argv.size) { return argv[i + 1] }
+            return ""
+        }
+        i++
+    }
+    return null
+}
+
+/// Whether a flag is in an argument list at all.
+public func among(argv: List<String>, flag: String): Bool {
+    for (x in argv) { if (x == flag) { return true } }
+    return false
+}
+
+/// The same two, asked of this process's own command line.
+public func flagValue(flag: String): String? { return firstAfter(args(), flag) }
+public func hasFlag(flag: String): Bool { return among(args(), flag) }

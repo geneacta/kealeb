@@ -782,6 +782,36 @@ There is no TLS. Put it behind a reverse proxy, which is where a terminator
 belongs; `X-Forwarded-For` arrives as an ordinary header and `req.peer` is the
 proxy.
 
+### Answering once, and not serving
+
+`run` looks at the command line first. Two flags make the program answer one
+question and exit instead of binding a port:
+
+```sh
+build/app --routes            # one route a line: GET /user/{id}
+build/app --render /user/7    # that page's HTML, on standard output
+```
+
+They exist so that a tool — an editor, a build step, a test — can have a page
+**as this program builds it** rather than as something else guesses it would.
+`--render` puts a browser's request through `chain()`, which is the same
+construction the server uses and not a copy of it: filters run, `onNotFound`
+answers a path with no route, `secure` adds its headers. A route behind an
+authentication filter renders the refusal a visitor gets, which is the point.
+
+A body is printed whatever the status, because that is what a browser is shown
+— a rendered 404 page is the preview working, not failing. If what you want to
+know is whether a route exists, that is `--routes`, which also lists the
+framework's own: `/kealeb/kealeb.css`, `/kealeb/kealeb.js`, `/kealeb/live`.
+
+If your program has its own `main` and does not call `run`, ask for the same
+thing directly:
+
+```keal
+if (site.answeredOnce()) { return }   // --render / --routes, then stop
+site.serverOn(8080).run()
+```
+
 Standard output is line-buffered from the moment the server starts, so a log
 piped to a file or a supervisor arrives as it is written.
 

@@ -807,6 +807,38 @@ Il n'y a pas de TLS. Mettez-le derrière un proxy inverse, qui est la place
 d'un terminateur ; `X-Forwarded-For` arrive comme un en-tête ordinaire et
 `req.peer` est le proxy.
 
+### Répondre une fois, sans servir
+
+`run` regarde d'abord la ligne de commande. Deux drapeaux font répondre le
+programme à une seule question puis sortir, au lieu de prendre un port :
+
+```sh
+build/app --routes            # une route par ligne : GET /user/{id}
+build/app --render /user/7    # le HTML de cette page, sur la sortie standard
+```
+
+Ils existent pour qu'un outil — un éditeur, une étape de construction, un test
+— obtienne une page **telle que ce programme la fabrique**, et non telle qu'un
+autre devine qu'il la fabriquerait. `--render` fait passer la requête d'un
+navigateur par `chain()`, qui est la construction que le serveur utilise et non
+une copie : les filtres tournent, `onNotFound` répond sur un chemin sans route,
+`secure` ajoute ses en-têtes. Une route derrière un filtre d'authentification
+rend le refus qu'un visiteur reçoit, et c'est bien le but.
+
+Un corps est imprimé quel que soit le statut, parce que c'est ce qu'un
+navigateur affiche : une page 404 rendue est l'aperçu qui marche, pas qui
+échoue. Si la question est *cette route existe-t-elle*, c'est `--routes` qui y
+répond, et il liste aussi les routes du cadriciel lui-même :
+`/kealeb/kealeb.css`, `/kealeb/kealeb.js`, `/kealeb/live`.
+
+Si votre programme a son propre `main` et n'appelle pas `run`, demandez la
+même chose directement :
+
+```keal
+if (site.answeredOnce()) { return }   // --render / --routes, puis on s'arrête
+site.serverOn(8080).run()
+```
+
 La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc
 un journal redirigé vers un fichier ou un superviseur arrive au fil de
 l'écriture.

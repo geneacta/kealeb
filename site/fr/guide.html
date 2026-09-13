@@ -347,6 +347,15 @@ s.maxRequests = 500                   // par connexion, puis on ferme
 s.handle = { req -&gt; monPropreAiguillage(req) }
 s.run()</code></pre>
 <p>Il n'y a pas de TLS. Mettez-le derrière un proxy inverse, qui est la place d'un terminateur ; <code>X-Forwarded-For</code> arrive comme un en-tête ordinaire et <code>req.peer</code> est le proxy.</p>
+<h3 id="r-pondre-une-fois-sans-servir">Répondre une fois, sans servir</h3>
+<p><code>run</code> regarde d'abord la ligne de commande. Deux drapeaux font répondre le programme à une seule question puis sortir, au lieu de prendre un port :</p>
+<pre class="lang-sh"><code>build/app --routes            # une route par ligne : GET /user/{id}
+build/app --render /user/7    # le HTML de cette page, sur la sortie standard</code></pre>
+<p>Ils existent pour qu'un outil — un éditeur, une étape de construction, un test — obtienne une page <strong>telle que ce programme la fabrique</strong>, et non telle qu'un autre devine qu'il la fabriquerait. <code>--render</code> fait passer la requête d'un navigateur par <code>chain()</code>, qui est la construction que le serveur utilise et non une copie : les filtres tournent, <code>onNotFound</code> répond sur un chemin sans route, <code>secure</code> ajoute ses en-têtes. Une route derrière un filtre d'authentification rend le refus qu'un visiteur reçoit, et c'est bien le but.</p>
+<p>Un corps est imprimé quel que soit le statut, parce que c'est ce qu'un navigateur affiche : une page 404 rendue est l'aperçu qui marche, pas qui échoue. Si la question est <em>cette route existe-t-elle</em>, c'est <code>--routes</code> qui y répond, et il liste aussi les routes du cadriciel lui-même : <code>/kealeb/kealeb.css</code>, <code>/kealeb/kealeb.js</code>, <code>/kealeb/live</code>.</p>
+<p>Si votre programme a son propre <code>main</code> et n'appelle pas <code>run</code>, demandez la même chose directement :</p>
+<pre class="lang-keal"><code>if (site.answeredOnce()) { return }   // --render / --routes, puis on s&#x27;arrête
+site.serverOn(8080).run()</code></pre>
 <p>La sortie standard est tamponnée par lignes dès le démarrage du serveur, donc un journal redirigé vers un fichier ou un superviseur arrive au fil de l'écriture.</p>
 <h3 id="la-compression">La compression</h3>
 <p>Toute réponse qu'un navigateur peut lire compressée l'est :</p>

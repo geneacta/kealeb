@@ -1,7 +1,7 @@
 <!-- kealeb-band:start -->
 <p align="right">
   <a href="https://github.com/geneacta/kealeb/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat"></a>
-  <a href="https://github.com/geneacta/kealeb/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-87%25-brightgreen?style=flat"></a>
+  <a href="https://github.com/geneacta/kealeb/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-88%25-brightgreen?style=flat"></a>
   <a href="https://github.com/geneacta/keal/releases/tag/v1.3.0"><img alt="Keal" src="https://img.shields.io/badge/Keal-1.3.0-orange?style=flat"></a>
 </p>
 <!-- kealeb-band:end -->
@@ -55,6 +55,35 @@ tools/build.sh hello.keal && build/hello
 
 That is a whole page, styled, in dark mode if the machine is, at
 `http://127.0.0.1:8080`.
+
+## One answer, without a server
+
+The same binary answers two questions on the command line and exits, which is
+what lets an editor show a page without running anything or guessing at what
+kealeb would produce:
+
+```sh
+build/hello --routes          # GET /, GET /hi/{name}, POST /greet, …
+build/hello --render /        # that page's HTML, on standard output
+```
+
+**The answer is the program's own.** `--render` builds the request a browser
+sends, puts it through **the same filter chain the server uses** — the same
+construction, not a second one — and prints what comes back. So a route behind
+an authentication filter renders as a visitor sees it, which is usually a
+refusal; a path with no route renders the site's own `onNotFound` page; and
+`secure`'s headers are on the response because they are on every response.
+
+This is the bargain keal-view makes with `--snapshot`, and for the same
+reason. A tool that reproduced a page from the outside would be a second
+implementation of `render`, agreeing with this one on the day it was written
+and disagreeing the first time either moved.
+
+`--render` prints a body whatever the status, because that is what a browser
+shows: a 404 page rendered is the preview working, not failing. The question
+*does this route exist* is what `--routes` answers, and `--routes` lists the
+framework's own routes too — the stylesheet, the client script, the live
+socket — which a tool reading your source cannot see.
 
 ## A live page
 
