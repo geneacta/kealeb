@@ -387,22 +387,22 @@ The honest list.
 * **Windows.** `runtime/kb.h` is POSIX. Winsock wants a different `poll` and a
   different `close`; the surface is drawn so that it arrives as one more
   `#if`, not as a second design.
-* **Chunked request bodies**, `multipart/form-data` (so no file uploads yet),
-  and compression. Each is refused by name rather than half-read.
+* **Chunked request bodies.** Refused by name with 501 rather than half-read.
+  Chunked *responses* are not written either: every body is sent with its
+  length.
 * **Several event loops.** One core today.
-* **A filter chain.** `Server.handle` is one function and can be replaced
-  wholesale, which covers logging and authentication awkwardly. A proper
-  `before`/`after` belongs here.
 
-Three things kealeb wants from the language, and does not have. `keal build`
+Two things kealeb wants from the language, and does not have. `keal build`
 does not compile **nested functions**, which is the natural shape for a page's
 helpers — it refuses them by name, and
-[`examples/todo.keal`](examples/todo.keal) says what to write instead. A
-lambda cannot capture a **top-level binding from another module**, so
-`src/app.keal` copies two into locals first. And a **lambda's parameter cannot
-be `var`**, so nothing a handler is given can be changed — which is why
-`dispatch` builds a new `Request` rather than writing the captured parameters
-into the old one, and it turned out to be the better design.
+[`examples/todo.keal`](examples/todo.keal) says what to write instead. And a
+**lambda's parameter cannot be `var`**, so nothing a handler is given can be
+changed — which is why `dispatch` builds a new `Request` rather than writing
+the captured parameters into the old one, and it turned out to be the better
+design. A third it wanted and now has: a lambda can read a **top-level binding
+from another module**. `src/app.keal` still copies what a handler needs into
+locals first, for a reason that is not the compiler's — a handler that
+captured `this` would close a ring the audit reports as a leak.
 
 ## License
 

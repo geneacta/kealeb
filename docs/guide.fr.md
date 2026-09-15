@@ -625,10 +625,12 @@ Un 206 n'est jamais compressé : un intervalle nomme des octets de la ressource
 telle qu'elle est, donc une tranche compressée serait une tranche de quelque
 chose que le client n'a pas demandé.
 
-La limite honnête : le fichier est lu en entier avant que la tranche soit
-découpée. C'est très bien pour les tailles dont une page est faite et faux pour
-un film, et c'est la même limite que partout ailleurs ici — rien ne circule
-encore au fil de l'eau.
+Un intervalle sur un fichier au-delà de `streamFrom` circule comme le fichier
+entier le ferait : le serveur l'ouvre, se place sur le premier octet demandé
+et envoie la tranche au fur et à mesure que la socket la prend. En deçà de la
+ligne, le fichier est lu en entier et la tranche découpée en mémoire, ce qui
+convient aux tailles dont une page est faite. Dans les deux cas le serveur ne
+tient jamais d'un film plus que le morceau qu'il est en train d'écrire.
 
 ## 10. JSON
 
@@ -1273,10 +1275,12 @@ POST-puis-redirection, que vous voulez de toute façon.
 * Il ne parlera à aucune base de données autre que SQLite, et seulement si vous
   la demandez par un second import et `-lsqlite3`.
 * Il ne fera pas correspondre les lignes à vos records tout seul. Voir §12.
-* Il ne compressera pas. Il ne parlera ni HTTP/2 ni TLS.
+* Il ne parlera ni HTTP/2 ni TLS.
 * Il ne lira pas un corps de requête en morceaux — il répond **501** et le
   dit.
-* Il ne lira pas `multipart/form-data`, donc pas encore d'envoi de fichiers.
+* Il ne lira pas `multipart/form-data` dans un corps déversé sur disque : un
+  formulaire au-delà de `spoolFrom` qui porte un fichier veut un gestionnaire
+  qui analyse le fichier lui-même. Voir §9.
 * Il n'exécutera pas votre gestionnaire sur un autre fil, donc un gestionnaire
   qui bloque bloque le serveur. Répondez, et revenez.
 * Il n'échappera pas ce que vous mettez dans `raw`. C'est à cela que sert le

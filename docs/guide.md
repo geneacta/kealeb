@@ -607,9 +607,11 @@ rather than working harder.
 A 206 is never compressed: a range names bytes of the resource as it is, so a
 compressed slice would be a slice of something the client did not ask for.
 
-The honest limit: the file is read whole before the slice is cut. That is fine
-for the sizes a page is made of and wrong for a film, and it is the same
-limitation as everywhere else here — nothing streams yet.
+A range on a file above `streamFrom` is streamed like the whole file would be:
+the server opens it, seeks to the first byte asked for, and sends the slice as
+the socket takes it. Below the line the file is read whole and the slice cut in
+memory, which is fine for the sizes a page is made of. Either way the server
+never holds more of a film than the piece it is writing.
 
 ## 10. JSON
 
@@ -1227,9 +1229,11 @@ anyway.
 * It will not talk to any database but SQLite, and only when you ask for it
   with a second import and `-lsqlite3`.
 * It will not map rows onto your records for you. See §12.
-* It will not compress. It will not speak HTTP/2, or TLS.
+* It will not speak HTTP/2, or TLS.
 * It will not read a chunked request body — it answers **501** and says so.
-* It will not read `multipart/form-data`, so there are no file uploads yet.
+* It will not read `multipart/form-data` out of a body spooled to disk: a
+  form over `spoolFrom` with a file in it wants a handler that parses the file
+  itself. See §9.
 * It will not run your handler on another thread, so a handler that blocks
   blocks the server. Answer, and return.
 * It will not escape what you put in `raw`. That is what the name is for.
