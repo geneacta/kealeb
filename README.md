@@ -324,6 +324,9 @@ compiles it as part of the program.
 * **[kealeb.dev-ish: the site](https://geneacta.github.io/kealeb/)** — the same
   documents, laid out, in [English](https://geneacta.github.io/kealeb/guide.html)
   and in [French](https://geneacta.github.io/kealeb/fr/guide.html).
+* **[Getting a project up](docs/start.md)** — what to install, the two ways
+  to start, and every command with what it prints. In
+  [French](docs/start.fr.md) too.
 * **[The guide](docs/guide.md)** — routes, pages, live pages, the widgets,
   static files, sessions, testing, deployment. Read this one.
 * **[Le guide, en français](docs/guide.fr.md)** — the same walkthrough.

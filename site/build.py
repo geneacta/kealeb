@@ -4,8 +4,8 @@
     python3 site/build.py
     python3 site/build.py --external    the same, plus following the links out
 
-Three pages in each language — the landing page, the guide, and the
-examples — generated from the documents in this repository, so the site
+Four pages in each language — the landing page, getting a project up, the
+guide, and the examples — generated from the documents in this repository, so the site
 cannot say something the repository does not. English lands in `site/`,
 French in `site/fr/`.
 
@@ -65,7 +65,8 @@ def fix_href(href, lang="en"):
         # it, and it points somewhere the text did not say. Keal's site had
         # three of those in production, found by exactly this check. So the
         # missing case stops the build instead.
-        pages = {"guide": "guide.html", "guide.fr": "guide.html", "README": "index.html"}
+        pages = {"guide": "guide.html", "guide.fr": "guide.html",
+                 "start": "start.html", "start.fr": "start.html", "README": "index.html"}
         if name in pages:
             return pages[name] + anchor
         if href.replace("../", "").startswith("docs/"):
@@ -194,8 +195,10 @@ def markdown(text):
 # ---- page chrome ---------------------------------------------------------
 
 NAV = {
-    "en": [("index.html", "Home"), ("guide.html", "Guide"), ("examples.html", "Examples")],
-    "fr": [("index.html", "Accueil"), ("guide.html", "Le guide"), ("examples.html", "Exemples")],
+    "en": [("index.html", "Home"), ("start.html", "Start"), ("guide.html", "Guide"),
+           ("examples.html", "Examples")],
+    "fr": [("index.html", "Accueil"), ("start.html", "Démarrer"), ("guide.html", "Le guide"),
+           ("examples.html", "Exemples")],
 }
 
 FOOTER = {
@@ -389,7 +392,7 @@ HERO = {
         "sub": ("Routes and handlers like Spring Boot, pages built out of components like "
                 "Vaadin — and the whole of both is <code>.keal</code> files. The C underneath "
                 "opens sockets and moves bytes. It does not decide anything."),
-        "a": "Read the guide", "b": "On GitHub",
+        "a": "Get a project up", "b": "Read the guide",
     },
     "fr": {
         "pill": "Un fil, aucun verrou, seule la différence traverse",
@@ -397,7 +400,7 @@ HERO = {
         "sub": ("Des routes et des gestionnaires comme Spring Boot, des pages faites de "
                 "composants comme Vaadin — et tout cela est du <code>.keal</code>. Le C en "
                 "dessous ouvre des sockets et déplace des octets. Il ne décide rien."),
-        "a": "Lire le guide", "b": "Sur GitHub",
+        "a": "Monter un projet", "b": "Lire le guide",
     },
 }
 
@@ -492,8 +495,8 @@ def landing(lang):
     <span class="pill">%(pill)s</span>
     <h1>%(title)s</h1>
     <p class="sub">%(sub)s</p>
-    <div class="hero-cta"><a class="cta" href="guide.html">%(a)s</a>
-      <a class="cta2" href="https://github.com/geneacta/kealeb">%(b)s</a></div>
+    <div class="hero-cta"><a class="cta" href="start.html">%(a)s</a>
+      <a class="cta2" href="guide.html">%(b)s</a></div>
   </div>
   <div class="hero-code">%(live)s</div>
 </section>
@@ -520,6 +523,27 @@ def landing(lang):
             "Un cadriciel web pour Keal : les routes de Spring Boot, les pages de Vaadin, et tout "
             "cela en .keal.")
     return page(lang, "index.html", title, desc, body, active="index.html")
+
+
+# ---- getting a project up ------------------------------------------------
+
+def start(lang):
+    """The step-by-step: what to install, the two ways to begin, and every
+    command with what it prints. Generated from `docs/start.md` like the
+    guide, so a command on the site is a command in the repository — and the
+    suite runs the same ones."""
+    text = read("docs/start.md" if lang == "en" else "docs/start.fr.md")
+    lines = [l for l in text.splitlines()
+             if not l.startswith("*La même marche") and not l.startswith("*The same steps")]
+    body, toc = markdown("\n".join(lines[1:]))
+    title = "Getting a project up" if lang == "en" else "Monter un projet"
+    desc = ("What to install, the two ways to start a kealeb project, and every command "
+            "with what it prints." if lang == "en" else
+            "Quoi installer, les deux façons de démarrer un projet kealeb, et chaque commande "
+            "avec ce qu'elle affiche.")
+    return page(lang, "start.html", title, desc,
+                '<div class="doc-head"><h1>%s</h1></div>%s' % (title, body),
+                active="start.html", toc=toc)
 
 
 # ---- the guide -----------------------------------------------------------
@@ -581,12 +605,13 @@ def main():
     written = []
     for lang in ("en", "fr"):
         written.append(write(lang, "index.html", landing(lang)))
+        written.append(write(lang, "start.html", start(lang)))
         written.append(write(lang, "guide.html", guide(lang)))
         written.append(write(lang, "examples.html", examples(lang)))
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for where in ("", "fr/"):
-        for name in ("index.html", "guide.html", "examples.html"):
+        for name in ("index.html", "start.html", "guide.html", "examples.html"):
             lines.append("  <url><loc>%s%s%s</loc></url>" % (BASE_URL, where, name))
     lines.append("</urlset>")
     written.append(write("en", "sitemap.xml", "\n".join(lines) + "\n"))

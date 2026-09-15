@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monter un projet</title>
+<meta name="description" content="Quoi installer, les deux façons de démarrer un projet kealeb, et chaque commande avec ce qu&#x27;elle affiche.">
+<link rel="canonical" href="https://geneacta.github.io/kealeb/fr/start.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealeb/start.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealeb/fr/start.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealeb/start.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kealeb">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="Monter un projet">
+<meta property="og:description" content="Quoi installer, les deux façons de démarrer un projet kealeb, et chaque commande avec ce qu&#x27;elle affiche.">
+<meta property="og:url" content="https://geneacta.github.io/kealeb/fr/start.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Monter un projet">
+<meta name="twitter:description" content="Quoi installer, les deux façons de démarrer un projet kealeb, et chaque commande avec ce qu&#x27;elle affiche.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Familjen+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="../assets/k.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="../assets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">eb</span></span>
+    </a>
+    <div class="nav-links"><a href="index.html">Accueil</a><a href="start.html" class="tab-active">Démarrer</a><a href="guide.html">Le guide</a><a href="examples.html">Exemples</a></div>
+  </div>
+  <div class="nav-right">
+    <span class="badge">v0.1.0</span>
+    <a class="btn-keal" href="https://geneacta.github.io/keal/fr/">Keal</a>
+    <a class="btn-lang" href="../start.html">English</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealeb">GitHub</a>
+  </div>
+</nav>
+<div class="dgrid"><div></div><div class="dmain prose"><div class="doc-head"><h1>Monter un projet</h1></div><p>Chaque commande de cette page a été lancée, dans cet ordre, sur une machine qui n'avait que git et un compilateur C. Là où le guide explique, cette page dit seulement quoi taper et ce que vous devez voir. Quand quelque chose ne se passe pas comme c'est écrit ici, c'est un bug de cette page.</p>
+<hr>
+<h2 id="1-ce-qu-il-vous-faut">1. Ce qu'il vous faut</h2>
+<div class="tablewrap"><table><thead><tr><th></th><th>pour</th><th>vérifier avec</th></tr></thead><tbody><tr><td><strong>git</strong></td><td>récupérer Keal, kealeb et vos dépendances</td><td><code>git --version</code></td></tr><tr><td><strong>un compilateur C</strong></td><td><code>keal build</code> émet du C et le confie à <code>cc</code>, ou à <code>gcc</code> ou <code>clang</code> quand il n'y a pas de <code>cc</code>. <code>CC=clang</code> choisit.</td><td><code>cc --version</code></td></tr><tr><td><strong>Rust, avec cargo</strong></td><td>construire le compilateur Keal, une fois</td><td><code>cargo --version</code></td></tr><tr><td><strong>la bibliothèque SQLite</strong></td><td>seulement si votre programme ouvre une base — <code>libsqlite3-dev</code> sur Debian et Ubuntu, <code>sqlite-devel</code> sur Fedora, <code>sqlite</code> par Homebrew</td><td><code>pkg-config --libs sqlite3</code></td></tr><tr><td><strong>node</strong></td><td>seulement pour lancer le test navigateur de kealeb lui-même ; un projet n'en a jamais besoin</td><td></td></tr></tbody></table></div>
+<p>Linux, macOS et les BSD. Windows n'y est pas encore, et le script de construction le dit plutôt que d'essayer.</p>
+<h2 id="2-keal-le-compilateur">2. Keal, le compilateur</h2>
+<p>kealeb est écrit en Keal, et <code>keal build</code> est ce qui fait d'un fichier <code>.keal</code> un exécutable. Construisez-le une fois :</p>
+<pre class="lang-sh"><code>git clone https://github.com/geneacta/keal
+cd keal
+cargo build --release</code></pre>
+<p>Le compilateur est alors dans <code>target/release/keal</code>. Mettez-le sur votre chemin :</p>
+<pre class="lang-sh"><code>cargo install --path .            # ou : export PATH=$PWD/target/release:$PATH
+keal --version                    # keal 1.3.0</code></pre>
+<p>kealeb déclare le Keal contre lequel il est construit dans son propre <code>keal.toml</code>, et le badge en tête du README le montre. Plus récent convient ; plus ancien peut refuser quelque chose dont ce cadriciel dépend, et dit quoi.</p>
+<p>Le script de construction trouve aussi un compilateur qui n'est <strong>pas</strong> sur votre chemin : il essaie <code>$KEAL</code> d'abord, puis un dépôt <code>keal</code> à côté du projet, puis le chemin. Deux <code>git clone</code> côte à côte marchent donc sans toucher au chemin.</p>
+<h2 id="3-deux-fa-ons-de-d-marrer">3. Deux façons de démarrer</h2>
+<p>La première vous montre le cadriciel en une minute. La seconde est celle que vous gardez.</p>
+<h3 id="a-dans-le-d-p-t-de-kealeb-lui-m-me">A. Dans le dépôt de kealeb lui-même</h3>
+<pre class="lang-sh"><code>git clone https://github.com/geneacta/kealeb
+cd kealeb
+tools/build.sh examples/hello.keal
+build/hello</code></pre>
+<p>Ouvrez <code>http://127.0.0.1:8080</code>. C'est une page, mise en forme, en mode sombre si votre machine l'est, sans aucun JavaScript dessus. Ctrl-C l'arrête.</p>
+<p>Les autres <a href="https://github.com/geneacta/kealeb/blob/main/examples">exemples</a> sont aussi des programmes entiers, chacun construit et lancé par la suite de tests :</p>
+<div class="tablewrap"><table><thead><tr><th></th><th></th><th>construire avec</th></tr></thead><tbody><tr><td><code>hello</code></td><td>une page</td><td><code>tools/build.sh examples/hello.keal</code></td></tr><tr><td><code>counter</code></td><td>une page vivante : l'état est sur le serveur, seule la différence traverse</td><td><code>tools/build.sh examples/counter.keal</code></td></tr><tr><td><code>todo</code></td><td>une liste à compléter, cocher et filtrer — ce à quoi sert une page vivante</td><td><code>tools/build.sh examples/todo.keal</code></td></tr><tr><td><code>files</code></td><td>servir un répertoire, y compris un fichier plus gros que la machine</td><td><code>tools/build.sh examples/files.keal</code></td></tr><tr><td><code>notes</code></td><td>une page vivante dont l'état est une base de données</td><td><code>tools/build.sh examples/notes.keal -lsqlite3</code></td></tr><tr><td><code>signin</code></td><td>mots de passe, sessions, une garde et le jeton CSRF</td><td><code>tools/build.sh examples/signin.keal -lsqlite3</code></td></tr></tbody></table></div>
+<p>L'exécutable arrive toujours dans <code>build/</code>, au nom du fichier.</p>
+<h3 id="b-votre-propre-projet">B. Votre propre projet</h3>
+<p>Un projet qui veut kealeb le dit dans un manifeste, et cesse de se soucier d'où vit le cadriciel.</p>
+<pre class="lang-sh"><code>mkdir monsite &amp;&amp; cd monsite</code></pre>
+<pre class="lang-toml"><code># keal.toml
+[package]
+name = &quot;monsite&quot;
+version = &quot;0.1.0&quot;
+
+[dependencies]
+kealeb = { git = &quot;https://github.com/geneacta/kealeb&quot;, tag = &quot;v0.1.0&quot; }</code></pre>
+<pre class="lang-sh"><code>keal fetch</code></pre>
+<pre><code>cloned kealeb (tag v0.1.0)
+1 dependency in /home/vous/monsite/.keal/deps</code></pre>
+<p>Deux choses sont apparues. <code>.keal/deps/kealeb/</code> est le cadriciel, extrait à l'étiquette que vous avez nommée. <code>keal.lock</code> note le commit auquel cette étiquette a résolu, pour qu'une étiquette déplacée en amont ne change pas en silence ce contre quoi vous construisez — commitez ce fichier. <code>.keal/deps/</code> est votre décision : commitez-le et le projet se construit sans réseau et sans git, ou ignorez-le et lancez <code>keal fetch</code> après chaque extraction. Un <code>rev = "…"</code> nommant un commit marche à la place de <code>tag</code>, et <code>keal fetch</code> ne touche à rien d'autre — pas de registre, pas de résolveur, pas de version plus récente choisie à votre place.</p>
+<p>Maintenant le programme :</p>
+<pre class="lang-keal"><code>// app.keal
+import &quot;dep:kealeb/kealeb.keal&quot;
+
+val site = app(&quot;Mon site&quot;)
+
+site.page(&quot;/&quot;, { req -&gt; column([
+    h1(&quot;Bonjour&quot;),
+    p(&quot;depuis Keal&quot;)
+])})
+
+site.run(8080)</code></pre>
+<p>L'import dit <code>dep:</code> et le nom de la dépendance, et lit <code>.keal/deps/kealeb/kealeb.keal</code> à côté du <code>keal.toml</code> le plus proche. Construisez-le avec le script venu avec la dépendance :</p>
+<pre class="lang-sh"><code>.keal/deps/kealeb/tools/build.sh app.keal
+build/app</code></pre>
+<p>La sortie arrive dans <strong>votre</strong> <code>build/</code>, pas dans celui de la dépendance. Si vous préférez voir le seul drapeau que le script ajoute — la surface C de kealeb est un en-tête, et il faut dire au compilateur où il est :</p>
+<pre class="lang-sh"><code>mkdir -p build &amp;&amp; cd build
+keal build ../app.keal -I../.keal/deps/kealeb/runtime</code></pre>
+<p><code>keal build</code> écrit l'exécutable, et le C qu'il a généré, dans le répertoire où il tourne, d'où le passage par <code>build/</code>. Ajoutez <code>-lsqlite3</code> à l'une ou l'autre commande quand le programme importe <code>dep:kealeb/src/sql.keal</code>, et rien sinon : kealeb ne se lie à aucune bibliothèque tant que vous ne demandez pas la base de données.</p>
+<h2 id="4-le-v-rifier-sans-navigateur">4. Le vérifier sans navigateur</h2>
+<p>Le programme répond à deux questions sur la ligne de commande et sort, au lieu d'ouvrir un port :</p>
+<pre class="lang-sh"><code>build/app --routes</code></pre>
+<pre><code>GET /
+GET /kealeb/kealeb.css
+GET /kealeb/kealeb.js
+GET /kealeb/live</code></pre>
+<p>Les trois dernières sont celles du cadriciel — sa feuille de style, son client navigateur, et la socket qu'une page vivante ouvre. Et :</p>
+<pre class="lang-sh"><code>build/app --render /</code></pre>
+<p>imprime le HTML de la page sur la sortie standard, tel que ce programme le construit : les filtres tournent, la page 404 répond à un chemin sans route, les en-têtes de <code>secure</code> y sont. C'est ce qu'un éditeur ou une étape de construction devrait demander plutôt que deviner.</p>
+<p>Le serveur lancé, depuis un autre terminal :</p>
+<pre class="lang-sh"><code>curl -i http://127.0.0.1:8080/</code></pre>
+<pre><code>HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+vary: accept-encoding
+content-length: 320
+connection: keep-alive</code></pre>
+<h2 id="5-l-arr-ter-et-le-mettre-en-service">5. L'arrêter, et le mettre en service</h2>
+<p>Ctrl-C, et ce qu'un gestionnaire de services envoie, ne tuent pas le processus : ils lui demandent de s'arrêter, l'écoute se ferme, et les connexions au milieu d'une réponse ont cinq secondes pour finir. Lancer une seconde copie sur le même port le dit et sort :</p>
+<pre><code>runtime error: kealeb could not start: port 8080 is already taken</code></pre>
+<p><code>run(8080)</code> écoute sur <code>127.0.0.1</code> et ne peut surprendre personne. Pour une machine que d'autres atteignent :</p>
+<pre class="lang-keal"><code>site.run(8080, &quot;&quot;)                    // toutes les interfaces
+site.log = false                      // pas une ligne par requête</code></pre>
+<p>Il n'y a pas de TLS. Mettez-le derrière un mandataire inverse, qui est là où un terminateur a sa place ; la sortie standard est vidée ligne par ligne dès que le serveur démarre, donc un journal envoyé dans un fichier ou lu par un superviseur arrive à mesure qu'il s'écrit. Le <a href="guide.html#13-la-mise-en-service">§13 du guide</a> donne les limites réglables — tailles d'en-tête et de corps, temps d'inactivité, requêtes par connexion — et <a href="guide.html#l-arr-t">l'ordre de l'arrêt</a>.</p>
+<h2 id="6-ce-que-vous-pouvez-y-mettre">6. Ce que vous pouvez y mettre</h2>
+<p>Tout ce qui suit est un appel sur <code>site</code>, ou un import de plus. Chaque ligne renvoie à la section du guide qui l'explique.</p>
+<div class="tablewrap"><table><thead><tr><th>Je veux</th><th>écrire</th><th>guide</th></tr></thead><tbody><tr><td>une page</td><td><code>site.page("/apropos", { req -&gt; column([h1("À propos")]) })</code></td><td><a href="guide.html#6-les-pages">§6</a></td></tr><tr><td>une route qui répond du texte</td><td><code>site.get("/ping", { req -&gt; text("pong") })</code></td><td><a href="guide.html#3-les-routes">§3</a></td></tr><tr><td>un chemin avec un paramètre</td><td><code>site.get("/user/{id}", { req -&gt; text(req.param("id")) })</code></td><td><a href="guide.html#ce-qu-un-motif-peut-dire">§3</a></td></tr><tr><td>du JSON en entrée et en sortie</td><td><code>parseJson(req.text())</code>, <code>jsonBody(jObj(fields).write())</code></td><td><a href="guide.html#10-json">§10</a></td></tr><tr><td>un formulaire, sans JavaScript</td><td><code>site.formPage("/inscription", build, onPost)</code></td><td><a href="guide.html#7-les-formulaires-sans-javascript">§7</a></td></tr><tr><td>un envoi de fichier</td><td><code>req.file("doc")</code>, puis <code>.saveTo(chemin)</code></td><td><a href="guide.html#les-fichiers">§7</a></td></tr><tr><td>une page vivante — l'état sur le serveur, seule la différence traverse</td><td><code>site.livePage("/", { req -&gt; view({ -&gt; … }) })</code></td><td><a href="guide.html#8-les-pages-vivantes">§8</a></td></tr><tr><td>une feuille de style écrite en Keal</td><td><code>site.css(sheet([rule(".hero").bg("…")]))</code></td><td><a href="guide.html#des-styles-crits-en-keal">§6</a></td></tr><tr><td>mon propre JavaScript</td><td><code>site.script("…")</code></td><td><a href="guide.html#le-javascript-et-quand-il-en-faut">§6</a></td></tr><tr><td>un répertoire de fichiers statiques</td><td><code>site.files("/static", "./public")</code></td><td><a href="guide.html#9-les-fichiers-statiques">§9</a></td></tr><tr><td>mes propres pages 404 et d'erreur</td><td><code>site.onNotFound(build)</code>, <code>site.onError(build)</code></td><td><a href="guide.html#quand-il-n-y-a-rien-et-quand-quelque-chose-a-cass">§13</a></td></tr><tr><td>quelque chose autour de chaque requête — journal, mur de connexion</td><td><code>site.use({ req, next -&gt; next.on(req) })</code></td><td><a href="guide.html#12-les-filtres">§12</a></td></tr><tr><td>du travail à intervalle</td><td><code>site.every(60000, job)</code>, <code>site.after(5000, job)</code></td><td><a href="guide.html#14-le-travail-programm">§14</a></td></tr><tr><td>une base de données</td><td><code>import "dep:kealeb/src/sql.keal"</code>, construire avec <code>-lsqlite3</code></td><td><a href="guide.html#15-une-base-de-donn-es">§15</a></td></tr><tr><td>connexion, sessions, CSRF, les en-têtes de sécurité</td><td><code>import "dep:kealeb/src/auth.keal"</code>, puis <code>site.secure(auth(secret))</code></td><td><a href="guide.html#16-la-s-curit">§16</a></td></tr><tr><td>des tests sans socket</td><td><code>dispatch(router, request("GET", "/x"))</code></td><td><a href="guide.html#11-les-tests">§11</a></td></tr><tr><td>savoir ce que le cadriciel ne fera pas</td><td></td><td><a href="guide.html#17-ce-que-le-cadriciel-ne-fera-pas">§17</a></td></tr></tbody></table></div>
+<p>Les chemins des lignes d'import sont ceux qu'un projet hors de ce dépôt écrit. À l'intérieur, les exemples disent <code>../kealeb.keal</code> et <code>../src/sql.keal</code>.</p>
+<h2 id="7-quand-a-ne-marche-pas">7. Quand ça ne marche pas</h2>
+<p><strong><code>no keal compiler found — set KEAL, or build ../keal</code>.</strong> Le script a cherché dans <code>$KEAL</code>, à côté du projet, et sur le chemin. Finissez le §2, ou dites-lui où est le compilateur : <code>KEAL=/chemin/vers/keal tools/build.sh app.keal</code>.</p>
+<p>**`<code> </code>func main<code> must declare what it returns</code><code>.** Un point d'entrée qui ne répond rien est un </code>proc main()<code>. Et ne l'appelez pas : Keal lance </code>main<code> tout seul une fois le premier niveau exécuté, donc une ligne </code>main()` en bas fait tourner tout le programme deux fois.</p>
+<p><strong><code>the C backend cannot compile nested functions yet</code>.</strong> Une fonction auxiliaire dans un gestionnaire veut être une fonction de premier niveau. <code>examples/todo.keal</code> montre la forme.</p>
+<p><strong><code>référence indéfinie vers « sqlite3_close »</code></strong>, et une douzaine de lignes de l'éditeur de liens comme elle. Le programme importe <code>src/sql.keal</code> et la construction n'a pas dit <code>-lsqlite3</code>. Ajoutez-le après le fichier source.</p>
+<p><strong><code>port 8080 is already taken</code>.</strong> Une autre copie tourne, ou autre chose. Arrêtez-la, ou choisissez un autre numéro dans <code>run</code>.</p>
+<p><strong>La page est là, mais une page vivante ne réagit pas au clic.</strong> Regardez la console du navigateur : le client ouvre une WebSocket vers <code>/kealeb/live</code>, et un mandataire inverse devant le serveur doit laisser passer les mises à niveau.</p></div><div class="dtoc"><div class="h">SUR CETTE PAGE</div><div class="dtoc-items"><a href="#1-ce-qu-il-vous-faut">1. Ce qu&#x27;il vous faut</a><a href="#2-keal-le-compilateur">2. Keal, le compilateur</a><a href="#3-deux-fa-ons-de-d-marrer">3. Deux façons de démarrer</a><a href="#4-le-v-rifier-sans-navigateur">4. Le vérifier sans navigateur</a><a href="#5-l-arr-ter-et-le-mettre-en-service">5. L&#x27;arrêter, et le mettre en service</a><a href="#6-ce-que-vous-pouvez-y-mettre">6. Ce que vous pouvez y mettre</a><a href="#7-quand-a-ne-marche-pas">7. Quand ça ne marche pas</a></div></div></div>
+<footer class="foot">
+  <div class="foot-l">Un cadriciel web pour Keal : des routes, des pages, et l'état qui reste sur le serveur. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealeb">Les sources sur GitHub</a>
+    <a href="https://geneacta.github.io/keal/fr/">Le langage Keal</a>
+    <a href="https://github.com/geneacta/kealeb/issues">Signalements</a>
+  </div>
+</footer>
+</div>
+</body>
+</html>
